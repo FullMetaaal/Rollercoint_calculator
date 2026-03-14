@@ -1,0 +1,38 @@
+{
+  "name": "roller-coin-calculator",
+  "version": "1.0.0",
+  "description": "Electron calculator for RollerCoin miner choice",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^41.0.2",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.rollercoin.calculator",
+    "productName": "RollerCoin Calculator",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "renderer.js",
+      "styles.css",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}

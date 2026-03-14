@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RollerCoin Miner Calculator</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <section class="hero">
+        <h1>Калькулятор выбора майнера</h1>
+        <p class="hero-subtitle">
+          Подберите самый выгодный майнер с учетом мощности, бонуса и стоимости.
+        </p>
+      </section>
+
+      <section class="stats-grid">
+        <article class="stat-card">
+          <div class="stat-label">Текущая общая мощность</div>
+          <div class="stat-value" id="currentTotalPowerStat">-</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-label">Bonus Power</div>
+          <div class="stat-value" id="currentBonusPowerStat">-</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-label">Кандидатов</div>
+          <div class="stat-value" id="candidateCountStat">0</div>
+        </article>
+      </section>
+
+      <section class="card">
+        <h2>Текущая система</h2>
+        <div class="grid-3">
+          <label>
+            Текущая базовая мощность
+            <input id="currentBasePowerValue" type="number" min="0" step="0.001" value="183.673" />
+          </label>
+          <label>
+            Единица
+            <select id="currentBasePowerUnit">
+              <option>Th/s</option>
+              <option selected>Ph/s</option>
+              <option>Eh/s</option>
+              <option>Zh/s</option>
+            </select>
+          </label>
+          <label>
+            Текущий общий бонус (%)
+            <input id="currentBonusPercent" type="number" min="0" step="0.01" value="330.49" />
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Майнер на замену (опционально)</h2>
+        <div class="grid-3">
+          <label>
+            Мощность старого майнера
+            <input id="oldMinerPowerValue" type="number" min="0" step="0.001" />
+          </label>
+          <label>
+            Единица
+            <select id="oldMinerPowerUnit">
+              <option>Th/s</option>
+              <option selected>Ph/s</option>
+              <option>Eh/s</option>
+              <option>Zh/s</option>
+            </select>
+          </label>
+          <label>
+            Бонус старого майнера (%)
+            <input id="oldMinerBonusPercent" type="number" min="0" step="0.01" />
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="header-row">
+          <h2>Кандидаты</h2>
+          <button id="addCandidateBtn" type="button" class="ghost">Добавить кандидата</button>
+        </div>
+
+        <table id="candidatesTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Мощность</th>
+              <th>Единица</th>
+              <th>Бонус (%)</th>
+              <th>Цена ($)</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="candidatesBody"></tbody>
+        </table>
+
+        <div class="actions">
+          <button id="calculateBtn" type="button" class="primary">Рассчитать лучшего</button>
+        </div>
+      </section>
+
+      <section class="card" id="resultCard">
+        <h2>Результат</h2>
+        <div id="resultContent">Добавьте хотя бы одного кандидата.</div>
+      </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
