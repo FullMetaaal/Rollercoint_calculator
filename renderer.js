@@ -2465,6 +2465,18 @@ function buildMarketRecommendations() {
       replacedMinerLevel: replacementSet?.miners[0]?.level ?? null,
       replacedMinerWidth: replacementSet?.width ?? null,
       replacedMinerCount: replacementSet?.miners?.length ?? 0,
+      replacementMiners: Array.isArray(replacementSet?.miners)
+        ? replacementSet.miners.map((replacementMiner) => ({
+          name: replacementMiner?.name || "Unknown",
+          level: replacementMiner?.level ?? null,
+          power: replacementMiner?.power ?? NaN,
+          bonusPercent: replacementMiner?.bonusPercent ?? NaN,
+          width: replacementMiner?.width ?? null,
+          imageUrl: replacementMiner?.imageUrl || "",
+          imageCandidates: Array.isArray(replacementMiner?.imageCandidates) ? replacementMiner.imageCandidates : [],
+          levelBadgeUrl: replacementMiner?.levelBadgeUrl || "",
+        }))
+        : [],
       replaceText: replacementSet?.label || "-",
     };
   };
@@ -2608,11 +2620,76 @@ function renderRoomReplacementSuggestions(recommendations = [], context = null) 
     return;
   }
 
-  const formatSuggestion = (miner, index) => {
+  const buildSuggestionImage = (miner) => {
+    const hasImage = typeof miner?.imageUrl === "string" && miner.imageUrl.length > 0;
+    const hasLevelBadge = typeof miner?.levelBadgeUrl === "string" && miner.levelBadgeUrl.length > 0;
+    const imageFallbacks = Array.isArray(miner?.imageCandidates)
+      ? miner.imageCandidates.filter((candidate) => candidate && candidate !== miner.imageUrl)
+      : [];
+    const fallbackAttr =
+      hasImage && imageFallbacks.length > 0
+        ? ` data-fallbacks="${escapeHtml(encodeURIComponent(JSON.stringify(imageFallbacks)))}"`
+        : "";
+
+    if (hasImage) {
+      return `<div class="market-miner-thumb-wrap suggestion-miner-visual">
+        <img class="market-miner-thumb" src="${escapeHtml(miner.imageUrl)}" alt="${escapeHtml(miner.name || "Miner")}" loading="lazy"${fallbackAttr} />
+        ${hasLevelBadge ? `<img class="market-miner-level-badge" src="${escapeHtml(miner.levelBadgeUrl)}" alt="Level ${escapeHtml(miner.level || "")}" loading="lazy" />` : ""}
+      </div>`;
+    }
+
+    return `<div class="market-miner-thumb-wrap suggestion-miner-visual">
+      <div class="market-miner-thumb placeholder">${escapeHtml(String(miner?.name || "M").slice(0, 1).toUpperCase())}</div>
+      ${hasLevelBadge ? `<img class="market-miner-level-badge" src="${escapeHtml(miner.levelBadgeUrl)}" alt="Level ${escapeHtml(miner.level || "")}" loading="lazy" />` : ""}
+    </div>`;
+  };
+
+  const formatMinerMeta = (miner, tone = "buy") => {
     const levelText = miner.level ? ` L${miner.level}` : "";
+    const widthText = Number.isFinite(Number(miner.width)) ? ` [${Math.floor(Number(miner.width))}]` : "";
+    const powerText = `${formatMarketValue(miner.power, 6)} Ph/s`;
+    const bonusValue = Number(miner.bonusPercent);
+    const bonusClass = bonusValue > 0 ? "positive" : bonusValue < 0 ? "negative" : "muted";
+    const bonusText = `${formatMarketValue(miner.bonusPercent, 2)}% bonus`;
+    return `
+      <div class="suggestion-miner-card suggestion-miner-card-${escapeHtml(tone)}">
+        ${buildSuggestionImage(miner)}
+        <div class="suggestion-miner-copy">
+          <div class="suggestion-miner-name">${escapeHtml(miner.name)}${escapeHtml(levelText)}${escapeHtml(widthText)}</div>
+          <div class="suggestion-miner-meta">
+            <span class="positive">${escapeHtml(powerText)}</span>
+            <span class="${bonusClass}">${escapeHtml(bonusText)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const formatSuggestion = (miner, index) => {
     const priceText = `${formatMarketValue(miner.price, 2)} ${miner.currency || "RLT"}`;
     const gainText = `+${formatMarketValue(miner.gainPower, 6)} Ph/s`;
-    return `${index + 1}. Buy ${miner.name}${levelText} -> remove ${miner.replaceText} | gain ${gainText} | price ${priceText}`;
+    const buyText = formatMinerMeta(miner, "buy");
+    const removeText =
+      Array.isArray(miner.replacementMiners) && miner.replacementMiners.length > 0
+        ? `<div class="suggestion-remove-list">${miner.replacementMiners.map((replacementMiner) => formatMinerMeta(replacementMiner, "remove")).join("")}</div>`
+        : escapeHtml(miner.replaceText);
+    return `
+      <li class="suggestion-item">
+        <div class="suggestion-line">
+          <span class="suggestion-rank">${index + 1}.</span>
+          <div class="suggestion-block">
+            <span class="suggestion-label">Buy</span>
+            <div class="suggestion-value">${buyText}</div>
+            <span class="suggestion-label suggestion-label-remove">Remove</span>
+            <div class="suggestion-value">${removeText}</div>
+          </div>
+        </div>
+        <div class="suggestion-metrics">
+          <span class="positive">${escapeHtml(gainText)}</span>
+          <span class="muted">price ${escapeHtml(priceText)}</span>
+        </div>
+      </li>
+    `;
   };
 
   const economySuggestions = [...actionableSuggestions]
@@ -2646,13 +2723,21 @@ function renderRoomReplacementSuggestions(recommendations = [], context = null) 
       ? `Budget: ${formatMarketValue(context.budget, 2)} RLT`
       : "Budget: not set";
 
-  roomReplacementSuggestions.textContent = [
-    `Cheaper upgrades (${budgetLabel}):`,
-    ...(economySuggestions.length > 0 ? economySuggestions : ["No upgrade suggestions."]),
-    "",
-    `Maximum power within budget (${budgetLabel}):`,
-    ...(powerSuggestions.length > 0 ? powerSuggestions : ["No power suggestions."]),
-  ].join("\n");
+  roomReplacementSuggestions.innerHTML = `
+    <div class="suggestion-group">
+      <div class="suggestion-title">Cheaper upgrades <span class="muted">(${escapeHtml(budgetLabel)})</span></div>
+      <ol class="suggestion-list">
+        ${economySuggestions.length > 0 ? economySuggestions.join("") : '<li class="muted">No upgrade suggestions.</li>'}
+      </ol>
+    </div>
+    <div class="suggestion-group">
+      <div class="suggestion-title">Maximum power within budget <span class="muted">(${escapeHtml(budgetLabel)})</span></div>
+      <ol class="suggestion-list">
+        ${powerSuggestions.length > 0 ? powerSuggestions.join("") : '<li class="muted">No power suggestions.</li>'}
+      </ol>
+    </div>
+  `;
+  bindMarketImageFallbacks();
 }
 
 function renderMarketRecommendations(recommendations, options = {}) {
@@ -2737,7 +2822,7 @@ function renderMarketRecommendations(recommendations, options = {}) {
 }
 
 function bindMarketImageFallbacks() {
-  [marketResultsBody, roomMinersBody].filter(Boolean).forEach((container) => {
+  [marketResultsBody, roomMinersBody, roomReplacementSuggestions].filter(Boolean).forEach((container) => {
     container.querySelectorAll("img.market-miner-thumb[data-fallbacks]").forEach((image) => {
     if (!(image instanceof HTMLImageElement)) return;
     if (image.dataset.fallbackBound === "1") return;

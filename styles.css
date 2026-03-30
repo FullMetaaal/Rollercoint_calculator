@@ -482,6 +482,145 @@ tbody tr:hover {
   white-space: pre-wrap;
 }
 
+.suggestion-group + .suggestion-group {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.suggestion-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: #dbeafe;
+}
+
+.suggestion-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.suggestion-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(7, 11, 27, 0.42);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  display: grid;
+  gap: 10px;
+}
+
+.suggestion-line {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.suggestion-line + .suggestion-line {
+  margin-top: 0;
+}
+
+.suggestion-rank {
+  color: #93c5fd;
+  font-weight: 700;
+  min-width: 18px;
+}
+
+.suggestion-spacer {
+  min-width: 18px;
+}
+
+.suggestion-block {
+  display: grid;
+  gap: 6px;
+}
+
+.suggestion-label {
+  color: #cbd5e1;
+  font-weight: 700;
+  min-width: 0;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.suggestion-label-remove {
+  color: #fca5a5;
+}
+
+.suggestion-value {
+  min-width: 0;
+  width: 100%;
+  display: block;
+}
+
+.suggestion-miner-name {
+  color: #f8fafc;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.suggestion-miner-meta {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.suggestion-metrics {
+  margin-top: 0;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  padding-left: calc(18px + 8px);
+}
+
+.suggestion-miner-card {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(2, 6, 23, 0.34);
+}
+
+.suggestion-miner-card-buy {
+  border-color: rgba(74, 222, 128, 0.18);
+}
+
+.suggestion-miner-card-remove {
+  border-color: rgba(248, 113, 113, 0.18);
+}
+
+.suggestion-miner-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.suggestion-miner-visual {
+  width: 44px;
+  height: 44px;
+}
+
+.suggestion-miner-visual .market-miner-thumb {
+  transform: translateY(-50px);
+}
+
+.suggestion-remove-list {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
 #marketCard > label,
 #marketCard > .grid-3,
 #marketCard > .actions {
@@ -620,5 +759,17 @@ tbody tr:hover {
 
   .table-shell table {
     min-width: 680px;
+  }
+
+  .suggestion-line {
+    grid-template-columns: 18px 1fr;
+  }
+
+  .suggestion-spacer {
+    display: none;
+  }
+
+  .suggestion-metrics {
+    padding-left: 0;
   }
 }
