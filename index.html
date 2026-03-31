@@ -40,6 +40,7 @@
           <label>
             Единица
             <select id="currentBasePowerUnit">
+              <option>Gh/s</option>
               <option>Th/s</option>
               <option selected>Ph/s</option>
               <option>Eh/s</option>
@@ -50,6 +51,19 @@
             Текущий общий бонус (%)
             <input id="currentBonusPercent" type="number" min="0" step="0.01" value="330.49" />
           </label>
+        </div>
+        <div class="header-row">
+          <label>
+            Display power unit
+            <select id="displayPowerUnit">
+              <option>Gh/s</option>
+              <option>Th/s</option>
+              <option selected>Ph/s</option>
+              <option>Eh/s</option>
+              <option>Zh/s</option>
+            </select>
+          </label>
+          <div></div>
         </div>
         <div class="header-row">
           <div></div>
@@ -68,6 +82,7 @@
           <label>
             Единица
             <select id="oldMinerPowerUnit">
+              <option>Gh/s</option>
               <option>Th/s</option>
               <option selected>Ph/s</option>
               <option>Eh/s</option>
@@ -121,6 +136,13 @@
 
         <div class="grid-3">
           <label>
+            Recommendation mode
+            <select id="marketRecommendationMode">
+              <option value="single" selected>Single purchase</option>
+              <option value="budget">Budget combinations</option>
+            </select>
+          </label>
+          <label>
             Replacement mode
             <select id="marketReplacementEnabled">
               <option value="off" selected>Off</option>
@@ -134,11 +156,12 @@
               <option value="flex">Flexible slots</option>
             </select>
           </label>
-          <label>
-            Replacement notes
-            <input id="marketReplacementHint" type="text" value="Flexible mode allows 2x width 1 for width 2." readonly />
-          </label>
         </div>
+
+        <label>
+          Replacement notes
+          <input id="marketReplacementHint" type="text" value="Flexible mode allows 2x width 1 for width 2." readonly />
+        </label>
 
         <div class="grid-3">
           <label>
@@ -193,7 +216,7 @@
             <tr>
               <th>#</th>
               <th>Room miner</th>
-              <th>Power (Ph/s)</th>
+              <th id="roomMinersPowerHeader">Power (Ph/s)</th>
               <th>Bonus (%)</th>
               <th>Width</th>
             </tr>
@@ -217,7 +240,7 @@
             Sort market results by
             <select id="marketSortMode">
               <option value="gainPerPrice" selected>Gain / RLT</option>
-              <option value="gainPower">Gain (Ph/s)</option>
+              <option id="marketSortGainPowerOption" value="gainPower">Gain (Ph/s)</option>
             </select>
           </label>
           <span id="marketResultsCountInfo" class="muted"></span>
@@ -229,11 +252,11 @@
               <th>#</th>
               <th>Miner</th>
               <th>Price</th>
-              <th>Power (Ph/s)</th>
+              <th id="marketResultsPowerHeader">Power (Ph/s)</th>
               <th>Bonus (%)</th>
               <th>Width</th>
-              <th>Gain (Ph/s)</th>
-              <th>Gain / RLT</th>
+              <th id="marketResultsGainHeader">Gain (Ph/s)</th>
+              <th id="marketResultsGainPerPriceHeader">Gain / RLT (Ph/s)</th>
             </tr>
           </thead>
           <tbody id="marketResultsBody">

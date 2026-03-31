@@ -2,13 +2,14 @@ const https = require("https");
 const { ipcRenderer } = require("electron");
 
 const POWER_MULTIPLIER = {
+  "Gh/s": 0.001,
   "Th/s": 1,
   "Ph/s": 1000,
   "Eh/s": 1000 ** 2,
   "Zh/s": 1000 ** 3,
 };
 
-const UNIT_ORDER = ["Th/s", "Ph/s", "Eh/s", "Zh/s"];
+const UNIT_ORDER = ["Gh/s", "Th/s", "Ph/s", "Eh/s", "Zh/s"];
 
 const CURRENT_SYSTEM_STORAGE_KEY = "rollercoin.currentSystem.v1";
 const CURRENT_SYSTEM_FIELD_IDS = [
@@ -20,10 +21,12 @@ const CURRENT_SYSTEM_FIELD_ID_SET = new Set(CURRENT_SYSTEM_FIELD_IDS);
 
 const ROLLERCOIN_MARKET_STORAGE_KEY = "rollercoin.marketSettings.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY = "rollercoin.marketMinersCache.v1";
-const ROLLERCOIN_MARKET_MINERS_CACHE_VERSION = 1;
+const ROLLERCOIN_MARKET_MINERS_CACHE_VERSION = 2;
 const MARKET_FIELD_IDS = [
+  "displayPowerUnit",
   "marketRoomConfigRef",
   "marketRoomWidthMode",
+  "marketRecommendationMode",
   "marketReplacementEnabled",
   "marketReplacementStrategy",
   "rollercoinCookie",
@@ -55,6 +58,7 @@ const currentBonusPowerStat = document.getElementById("currentBonusPowerStat");
 const candidateCountStat = document.getElementById("candidateCountStat");
 const refreshCurrentPowerBtn = document.getElementById("refreshCurrentPowerBtn");
 const currentSystemSyncStatus = document.getElementById("currentSystemSyncStatus");
+const displayPowerUnitInput = document.getElementById("displayPowerUnit");
 const authTokenIndicator = document.getElementById("authTokenIndicator");
 const authTokenMessage = document.getElementById("authTokenMessage");
 const authActionBtn = document.getElementById("authActionBtn");
@@ -63,6 +67,7 @@ const rollercoinLoginBtn = document.getElementById("rollercoinLoginBtn");
 const rollercoinCookieInput = document.getElementById("rollercoinCookie");
 const marketRoomConfigRefInput = document.getElementById("marketRoomConfigRef");
 const marketRoomWidthModeInput = document.getElementById("marketRoomWidthMode");
+const marketRecommendationModeInput = document.getElementById("marketRecommendationMode");
 const marketReplacementEnabledInput = document.getElementById("marketReplacementEnabled");
 const marketReplacementStrategyInput = document.getElementById("marketReplacementStrategy");
 const marketBudgetInput = document.getElementById("marketBudget");
@@ -86,6 +91,11 @@ const showMoreRoomMinersBtn = document.getElementById("showMoreRoomMinersBtn");
 const showMoreMarketResultsBtn = document.getElementById("showMoreMarketResultsBtn");
 const marketLogsOutput = document.getElementById("marketLogsOutput");
 const clearMarketLogsBtn = document.getElementById("clearMarketLogsBtn");
+const roomMinersPowerHeader = document.getElementById("roomMinersPowerHeader");
+const marketSortGainPowerOption = document.getElementById("marketSortGainPowerOption");
+const marketResultsPowerHeader = document.getElementById("marketResultsPowerHeader");
+const marketResultsGainHeader = document.getElementById("marketResultsGainHeader");
+const marketResultsGainPerPriceHeader = document.getElementById("marketResultsGainPerPriceHeader");
 
 let marketMinersCache = [];
 let marketSourceInfo = null;
@@ -104,9 +114,18 @@ let visibleRoomMinersCount = 25;
 let visibleMarketResultsCount = 25;
 let lastRenderedRoomMiners = [];
 let lastRenderedMarketRecommendations = [];
+let lastRenderedMarketRecommendationsOptions = {};
+let marketHoverTooltip = null;
+let marketHoverTooltipContent = new Map();
 
 const MARKET_LOG_MAX_LINES = 250;
 const TABLE_RENDER_BATCH_SIZE = 25;
+const MIN_RECOMMENDATION_GAIN_THS = 1;
+const BUDGET_COMBINATION_BUY_POOL_LIMIT = 90;
+const BUDGET_COMBINATION_REPLACEMENT_SET_LIMIT = 8;
+const BUDGET_COMBINATION_OPTION_LIMIT = 320;
+const BUDGET_COMBINATION_STATE_LIMIT = 220;
+const BUDGET_COMBINATION_RESULT_LIMIT = 160;
 
 function parseNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
@@ -125,33 +144,96 @@ function firstFiniteNumber(values) {
   return NaN;
 }
 
+function normalizeMinerDisplayLevel(value) {
+  const parsed = parseNumber(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+
+  const level = Math.floor(parsed);
+  return level === 1 ? 2 : level;
+}
+
+function buildMinerLevelBadgeUrl(level) {
+  const normalizedLevel = normalizeMinerDisplayLevel(level);
+  if (!normalizedLevel) return "";
+  return `https://rollercoin.com/static/img/storage/rarity_icons/level_${normalizedLevel}.png?v=1.0.0`;
+}
+
+function normalizePowerUnit(value) {
+  if (typeof value !== "string") return "";
+
+  const normalized = value.trim().toLowerCase().replaceAll(" ", "");
+  if (!normalized) return "";
+
+  if (["gh/s", "ghs", "gh"].includes(normalized)) return "Gh/s";
+  if (["th/s", "ths", "th"].includes(normalized)) return "Th/s";
+  if (["ph/s", "phs", "ph"].includes(normalized)) return "Ph/s";
+  if (["eh/s", "ehs", "eh"].includes(normalized)) return "Eh/s";
+  if (["zh/s", "zhs", "zh"].includes(normalized)) return "Zh/s";
+
+  return "";
+}
+
+function convertGhsToPhs(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return NaN;
+  return numericValue / (1000 ** 2);
+}
+
+function getDisplayPowerUnit() {
+  const selectedUnit = normalizePowerUnit(displayPowerUnitInput?.value);
+  return selectedUnit || "Ph/s";
+}
+
 function toThs(value, unit) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue < 0) return NaN;
   return numericValue * POWER_MULTIPLIER[unit];
 }
 
-function formatPowerFromThs(valueThs) {
-  if (!Number.isFinite(valueThs)) return "-";
-  let value = valueThs;
-  let unit = UNIT_ORDER[0];
-
-  for (let i = 0; i < UNIT_ORDER.length - 1; i += 1) {
-    if (value >= 1000) {
-      value /= 1000;
-      unit = UNIT_ORDER[i + 1];
-    } else {
-      break;
-    }
-  }
-
-  return `${value.toLocaleString("ru-RU", { maximumFractionDigits: 6 })} ${unit}`;
+function convertThsToUnit(valueThs, unit) {
+  const normalizedUnit = normalizePowerUnit(unit);
+  if (!Number.isFinite(valueThs) || !normalizedUnit) return NaN;
+  return valueThs / POWER_MULTIPLIER[normalizedUnit];
 }
 
-function formatSignedPower(valueThs) {
+function formatPowerFromThs(valueThs, options = {}) {
+  if (!Number.isFinite(valueThs)) return "-";
+  const unit = normalizePowerUnit(options.unit) || getDisplayPowerUnit();
+  const fractionDigits = Number.isFinite(options.fractionDigits) ? options.fractionDigits : 6;
+  const value = convertThsToUnit(valueThs, unit);
+  if (!Number.isFinite(value)) return "-";
+
+  return `${formatMarketValue(value, fractionDigits)} ${unit}`;
+}
+
+function formatPowerFromPhs(valuePhs, options = {}) {
+  return formatPowerFromThs(toThs(valuePhs, "Ph/s"), options);
+}
+
+function formatSignedPower(valueThs, options = {}) {
   if (!Number.isFinite(valueThs)) return "-";
   const sign = valueThs > 0 ? "+" : "";
-  return `${sign}${formatPowerFromThs(valueThs)}`;
+  return `${sign}${formatPowerFromThs(valueThs, options)}`;
+}
+
+function updatePowerUnitLabels() {
+  const unit = getDisplayPowerUnit();
+
+  if (roomMinersPowerHeader) {
+    roomMinersPowerHeader.textContent = `Power (${unit})`;
+  }
+  if (marketSortGainPowerOption) {
+    marketSortGainPowerOption.textContent = `Gain (${unit})`;
+  }
+  if (marketResultsPowerHeader) {
+    marketResultsPowerHeader.textContent = `Power (${unit})`;
+  }
+  if (marketResultsGainHeader) {
+    marketResultsGainHeader.textContent = `Gain (${unit})`;
+  }
+  if (marketResultsGainPerPriceHeader) {
+    marketResultsGainPerPriceHeader.textContent = `Gain / RLT (${unit})`;
+  }
 }
 
 function readNonNegativeNumber(inputId, required = true) {
@@ -424,7 +506,7 @@ function renderRoomMinersCollection(miners = [], options = {}) {
               <span>${escapeHtml(miner.name)}</span>
             </div>
           </td>
-          <td>${formatMarketValue(miner.power, 3)}</td>
+          <td>${formatPowerFromPhs(miner.power)}</td>
           <td>${formatMarketValue(miner.bonusPercent, 2)}%</td>
           <td>${escapeHtml(miner.width || "-")}</td>
         </tr>
@@ -491,8 +573,10 @@ function saveMarketSettings() {
 
   try {
     const payload = {
+      displayPowerUnit: displayPowerUnitInput?.value ?? "Ph/s",
       marketRoomConfigRef: marketRoomConfigRefInput?.value ?? "",
       marketRoomWidthMode: marketRoomWidthModeInput?.value ?? "any",
+      marketRecommendationMode: marketRecommendationModeInput?.value ?? "single",
       marketReplacementEnabled: marketReplacementEnabledInput?.value ?? "off",
       marketReplacementStrategy: marketReplacementStrategyInput?.value ?? "strict",
       rollercoinCookie: rollercoinCookieInput.value,
@@ -522,6 +606,12 @@ function restoreMarketSettings() {
     if (typeof parsed.rollercoinCookie === "string") {
       rollercoinCookieInput.value = parsed.rollercoinCookie;
     }
+    if (typeof parsed.displayPowerUnit === "string" && displayPowerUnitInput) {
+      const displayUnit = normalizePowerUnit(parsed.displayPowerUnit);
+      if (displayUnit) {
+        displayPowerUnitInput.value = displayUnit;
+      }
+    }
     if (typeof parsed.marketRoomConfigRef === "string" && marketRoomConfigRefInput) {
       marketRoomConfigRefInput.value = parsed.marketRoomConfigRef;
     }
@@ -531,6 +621,13 @@ function restoreMarketSettings() {
       ["any", "1", "2"].includes(parsed.marketRoomWidthMode)
     ) {
       marketRoomWidthModeInput.value = parsed.marketRoomWidthMode;
+    }
+    if (
+      typeof parsed.marketRecommendationMode === "string" &&
+      marketRecommendationModeInput &&
+      ["single", "budget"].includes(parsed.marketRecommendationMode)
+    ) {
+      marketRecommendationModeInput.value = parsed.marketRecommendationMode;
     }
     if (
       typeof parsed.marketReplacementEnabled === "string" &&
@@ -637,8 +734,12 @@ function restoreMarketMinersCache() {
 
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return false;
+    if (Array.isArray(parsed) || Number(parsed.version) !== ROLLERCOIN_MARKET_MINERS_CACHE_VERSION) {
+      localStorage.removeItem(ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY);
+      return false;
+    }
 
-    const rawMiners = Array.isArray(parsed) ? parsed : parsed.miners;
+    const rawMiners = parsed.miners;
     const normalizedMiners = normalizeCachedMarketMiners(rawMiners);
     if (normalizedMiners.length === 0) {
       localStorage.removeItem(ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY);
@@ -820,11 +921,11 @@ async function refreshCurrentPowerFromRollercoin(options = {}) {
     }
 
     applyCurrentSystemFromRollercoin(powerResult);
-    const syncedBasePhs = formatMarketValue(parseNumber(powerResult.basePowerPhs), 6);
+    const syncedBasePower = formatPowerFromPhs(parseNumber(powerResult.basePowerPhs));
     const syncedBonusPercent = formatMarketValue(parseNumber(powerResult.bonusPercent), 2);
     const authSuffix = powerResult.selectedAuthVariant ? ` via ${powerResult.selectedAuthVariant}` : "";
     setCurrentSystemSyncStatus(
-      `Synced from RollerCoin${authSuffix}: ${syncedBasePhs} Ph/s base, ${syncedBonusPercent}% bonus.`,
+      `Synced from RollerCoin${authSuffix}: ${syncedBasePower} base, ${syncedBonusPercent}% bonus.`,
       "success",
     );
 
@@ -870,6 +971,10 @@ function getMarketReplacementEnabled() {
   return marketReplacementEnabledInput?.value === "on";
 }
 
+function getMarketRecommendationMode() {
+  return marketRecommendationModeInput?.value === "budget" ? "budget" : "single";
+}
+
 function getMarketReplacementStrategy() {
   return marketReplacementStrategyInput?.value === "flex" ? "flex" : "strict";
 }
@@ -886,6 +991,13 @@ function buildReplacementSetLabel(miners) {
 }
 
 function buildRoomReplacementSets(strategy = "strict") {
+  const roomMinerMaskById = new Map(
+    roomMinersCache.map((miner, index) => [String(miner?.id || `room-miner-${index + 1}`), 1n << BigInt(index)]),
+  );
+  const buildRemovedMask = (miners) => miners.reduce((mask, miner) => {
+    const minerKey = String(miner?.id || "");
+    return mask | (roomMinerMaskById.get(minerKey) || 0n);
+  }, 0n);
   const singles = roomMinersCache
     .filter((miner) => Number.isFinite(Number(miner?.width)) && Number(miner.width) > 0)
     .map((miner) => ({
@@ -893,6 +1005,7 @@ function buildRoomReplacementSets(strategy = "strict") {
       miners: [miner],
       removedPowerThs: toThs(miner.power, "Ph/s"),
       removedBonusPercent: miner.bonusPercent,
+      removedMask: buildRemovedMask([miner]),
       label: buildReplacementSetLabel([miner]),
     }));
 
@@ -910,6 +1023,7 @@ function buildRoomReplacementSets(strategy = "strict") {
         miners,
         removedPowerThs: toThs(miners[0].power, "Ph/s") + toThs(miners[1].power, "Ph/s"),
         removedBonusPercent: miners[0].bonusPercent + miners[1].bonusPercent,
+        removedMask: buildRemovedMask(miners),
         label: buildReplacementSetLabel(miners),
       });
     }
@@ -1097,6 +1211,58 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll("\"", "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function ensureMarketHoverTooltip() {
+  if (marketHoverTooltip instanceof HTMLDivElement) {
+    return marketHoverTooltip;
+  }
+
+  const tooltip = document.createElement("div");
+  tooltip.className = "market-hover-tooltip";
+  tooltip.hidden = true;
+  document.body.appendChild(tooltip);
+  marketHoverTooltip = tooltip;
+  return tooltip;
+}
+
+function positionMarketHoverTooltip(clientX, clientY) {
+  if (!(marketHoverTooltip instanceof HTMLDivElement) || marketHoverTooltip.hidden) return;
+
+  const offset = 14;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  const tooltipRect = marketHoverTooltip.getBoundingClientRect();
+
+  let left = clientX + offset;
+  let top = clientY + offset;
+
+  if (left + tooltipRect.width > viewportWidth - 12) {
+    left = Math.max(12, clientX - tooltipRect.width - offset);
+  }
+  if (top + tooltipRect.height > viewportHeight - 12) {
+    top = Math.max(12, clientY - tooltipRect.height - offset);
+  }
+
+  marketHoverTooltip.style.left = `${Math.max(12, left)}px`;
+  marketHoverTooltip.style.top = `${Math.max(12, top)}px`;
+}
+
+function hideMarketHoverTooltip() {
+  if (!(marketHoverTooltip instanceof HTMLDivElement)) return;
+  marketHoverTooltip.hidden = true;
+}
+
+function showMarketHoverTooltip(html, clientX, clientY) {
+  if (typeof html !== "string" || !html.trim()) {
+    hideMarketHoverTooltip();
+    return;
+  }
+
+  const tooltip = ensureMarketHoverTooltip();
+  tooltip.innerHTML = html;
+  tooltip.hidden = false;
+  positionMarketHoverTooltip(clientX, clientY);
 }
 
 function pickLocalizedText(value) {
@@ -1404,13 +1570,12 @@ function extractMinerPower(rawItem) {
     rawItem?.hashrate,
     rawItem?.hash_rate,
   ]);
-  if (Number.isFinite(parsed) && rawItem?.__saleOrdersRaw === true) {
-    return parsed / 1000000;
+  if (!Number.isFinite(parsed)) {
+    return parsed;
   }
-  if (Number.isFinite(parsed) && rawItem?.__roomConfigRaw === true && parsed >= 100000) {
-    return parsed / 1000000;
-  }
-  return parsed;
+
+  // RollerCoin miner API power values come in Gh/s; store them internally as Ph/s.
+  return convertGhsToPhs(parsed);
 }
 
 function extractMinerBonus(rawItem) {
@@ -1459,7 +1624,14 @@ function extractMinerLevel(rawItem) {
     getByPath(rawItem, "item_info.level"),
     getByPath(rawItem, "product.level"),
   ]);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+
+  const level = Math.floor(parsed);
+  if (rawItem?.__roomConfigRaw === true) {
+    return level + 1;
+  }
+
+  return normalizeMinerDisplayLevel(level);
 }
 
 function extractMinerWidth(rawItem) {
@@ -1673,9 +1845,7 @@ function buildMarketImageUrlFromFilename(rawItem) {
 }
 
 function extractMinerLevelBadgeUrl(rawItem) {
-  const level = extractMinerLevel(rawItem);
-  if (!level) return "";
-  return `https://rollercoin.com/static/img/storage/rarity_icons/level_${level}.png?v=1.0.0`;
+  return buildMinerLevelBadgeUrl(extractMinerLevel(rawItem));
 }
 
 function extractMinerImageCandidates(rawItem, rootItem = null) {
@@ -1798,7 +1968,12 @@ function normalizeCachedMiner(rawItem, index) {
     return null;
   }
 
-  const bonusRaw = parseNumber(rawItem.bonusPercent);
+  const bonusRaw = firstFiniteNumber([
+    rawItem.bonusPercent,
+    rawItem.bonus_percent,
+    rawItem.percent_bonus,
+    rawItem.bonus,
+  ]);
   const bonusPercent = Number.isFinite(bonusRaw) ? bonusRaw : 0;
 
   const effectivePowerRaw = parseNumber(rawItem.effectivePower);
@@ -1832,11 +2007,11 @@ function normalizeCachedMiner(rawItem, index) {
   ]
     .map((entry) => normalizeImageUrl(entry))
     .filter(Boolean);
-  const levelRaw = parseNumber(rawItem.level);
-  const level = Number.isFinite(levelRaw) && levelRaw > 0 ? Math.floor(levelRaw) : null;
+  const level = normalizeMinerDisplayLevel(rawItem.level);
   const widthRaw = parseNumber(rawItem.width);
   const width = Number.isFinite(widthRaw) && widthRaw > 0 ? Math.floor(widthRaw) : extractMinerWidth(rawItem);
-  const levelBadgeUrl = normalizeImageUrl(rawItem.levelBadgeUrl || rawItem.level_badge_url);
+  const levelBadgeUrl =
+    normalizeImageUrl(rawItem.levelBadgeUrl || rawItem.level_badge_url) || buildMinerLevelBadgeUrl(level);
 
   return {
     id: String(idCandidate),
@@ -2302,7 +2477,7 @@ async function fetchMarketMiners(cookieHeader, requestId = null) {
 
       if (sessionResponse && sessionResponse.success && Array.isArray(sessionResponse.marketplaceOffers)) {
         hadSuccessfulSessionResponse = true;
-        const miners = normalizeMarketMiners(sessionResponse.marketplaceOffers);
+        const miners = normalizeCachedMarketMiners(sessionResponse.marketplaceOffers);
         if (miners.length === 0) {
           throw new Error("Marketplace/buy scan returned no valid miner offers.");
         }
@@ -2417,9 +2592,776 @@ function getMarketSortMode() {
   return value === "gainPower" ? "gainPower" : "gainPerPrice";
 }
 
+function getMarketMinerOfferKey(miner) {
+  const id = String(miner?.id || "");
+  const price = Number(miner?.price) || 0;
+  const power = Number(miner?.power) || 0;
+  const bonusPercent = Number(miner?.bonusPercent) || 0;
+  return `${id}:${price}:${power}:${bonusPercent}`;
+}
+
+function cloneMinerForRecommendation(miner) {
+  return {
+    id: String(miner?.id || ""),
+    name: String(miner?.name || "Unknown"),
+    level: miner?.level ?? null,
+    power: Number.isFinite(Number(miner?.power)) ? Number(miner.power) : NaN,
+    bonusPercent: Number.isFinite(Number(miner?.bonusPercent)) ? Number(miner.bonusPercent) : 0,
+    width: Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : null,
+    price: Number.isFinite(Number(miner?.price)) ? Number(miner.price) : NaN,
+    currency: typeof miner?.currency === "string" && miner.currency ? miner.currency : "RLT",
+    imageUrl: miner?.imageUrl || "",
+    imageCandidates: Array.isArray(miner?.imageCandidates) ? [...miner.imageCandidates] : [],
+    levelBadgeUrl: miner?.levelBadgeUrl || "",
+  };
+}
+
+function compareByGainThenEfficiencyDesc(leftItem, rightItem) {
+  if (rightItem.gainPower !== leftItem.gainPower) return rightItem.gainPower - leftItem.gainPower;
+  if (rightItem.gainPerPrice !== leftItem.gainPerPrice) return rightItem.gainPerPrice - leftItem.gainPerPrice;
+  return leftItem.price - rightItem.price;
+}
+
+function compareRecommendationItems(leftItem, rightItem, sortMode = "gainPerPrice") {
+  if (sortMode === "gainPower") {
+    return compareByGainThenEfficiencyDesc(leftItem, rightItem);
+  }
+  if (rightItem.gainPerPrice !== leftItem.gainPerPrice) return rightItem.gainPerPrice - leftItem.gainPerPrice;
+  if (rightItem.gainPower !== leftItem.gainPower) return rightItem.gainPower - leftItem.gainPower;
+  return leftItem.price - rightItem.price;
+}
+
+function sortRecommendationItems(items, sortMode = "gainPerPrice") {
+  return [...items].sort((leftItem, rightItem) => compareRecommendationItems(leftItem, rightItem, sortMode));
+}
+
+function buildRecommendationEntry({
+  currentSystem,
+  totalCurrentThs,
+  purchaseMiners,
+  replacementMiners = [],
+  price,
+  currency = "RLT",
+  boughtPowerThs,
+  boughtBonusPercent,
+  removedPowerThs = 0,
+  removedBonusPercent = 0,
+  removedMask = 0n,
+  buyMask = 0n,
+  entryType = "single",
+  replaceTextOverride = null,
+  sourceMinerId = "",
+  offerKey = "",
+  bundleKey = "",
+}) {
+  const normalizedPurchaseMiners = Array.isArray(purchaseMiners)
+    ? purchaseMiners.map((miner) => cloneMinerForRecommendation(miner))
+    : [];
+  const normalizedReplacementMiners = Array.isArray(replacementMiners)
+    ? replacementMiners.map((miner) => cloneMinerForRecommendation(miner))
+    : [];
+
+  const safeBoughtPowerThs = Number.isFinite(Number(boughtPowerThs))
+    ? Number(boughtPowerThs)
+    : normalizedPurchaseMiners.reduce((sum, miner) => sum + toThs(miner.power, "Ph/s"), 0);
+  const safeBoughtBonusPercent = Number.isFinite(Number(boughtBonusPercent))
+    ? Number(boughtBonusPercent)
+    : normalizedPurchaseMiners.reduce((sum, miner) => sum + (Number(miner.bonusPercent) || 0), 0);
+  const safeRemovedPowerThs = Number.isFinite(Number(removedPowerThs))
+    ? Number(removedPowerThs)
+    : normalizedReplacementMiners.reduce((sum, miner) => sum + toThs(miner.power, "Ph/s"), 0);
+  const safeRemovedBonusPercent = Number.isFinite(Number(removedBonusPercent))
+    ? Number(removedBonusPercent)
+    : normalizedReplacementMiners.reduce((sum, miner) => sum + (Number(miner.bonusPercent) || 0), 0);
+
+  const projectedBaseThs = currentSystem.baseThs + safeBoughtPowerThs - safeRemovedPowerThs;
+  const projectedBonusPercent = currentSystem.bonusPercent + safeBoughtBonusPercent - safeRemovedBonusPercent;
+  const projectedTotalThs = getCurrentTotal(projectedBaseThs, projectedBonusPercent);
+  const gainThs = projectedTotalThs - totalCurrentThs;
+  const numericPrice = Number(price);
+  const gainPerPrice = numericPrice > 0 ? gainThs / numericPrice : NaN;
+  const purchaseCount = normalizedPurchaseMiners.length;
+  const widthDisplayValues = normalizedPurchaseMiners
+    .map((miner) => (Number.isFinite(Number(miner?.width)) ? String(Math.floor(Number(miner.width))) : ""))
+    .filter(Boolean);
+  const widthDisplay = widthDisplayValues.length > 0 ? widthDisplayValues.join(" + ") : "-";
+  const leadMiner = normalizedPurchaseMiners[0] || {};
+
+  return {
+    entryType,
+    isBundle: purchaseCount > 1,
+    bundleKey,
+    offerKey: offerKey || getMarketMinerOfferKey(leadMiner),
+    sourceMinerId: String(sourceMinerId || leadMiner.id || ""),
+    name:
+      purchaseCount === 1
+        ? String(leadMiner.name || "Marketplace miner")
+        : buildReplacementSetLabel(normalizedPurchaseMiners),
+    price: numericPrice,
+    power: safeBoughtPowerThs / POWER_MULTIPLIER["Ph/s"],
+    bonusPercent: safeBoughtBonusPercent,
+    width: purchaseCount === 1 ? (leadMiner.width ?? null) : widthDisplay,
+    widthDisplay,
+    gainPower: gainThs / POWER_MULTIPLIER["Ph/s"],
+    gainPerPrice: Number.isFinite(gainPerPrice) ? gainPerPrice / POWER_MULTIPLIER["Ph/s"] : NaN,
+    projectedBasePower: projectedBaseThs / POWER_MULTIPLIER["Ph/s"],
+    projectedBonusPercent,
+    projectedTotalPower: projectedTotalThs / POWER_MULTIPLIER["Ph/s"],
+    replacedMinerName: normalizedReplacementMiners[0]?.name || "",
+    replacedMinerLevel: normalizedReplacementMiners[0]?.level ?? null,
+    replacedMinerWidth: normalizedReplacementMiners[0]?.width ?? null,
+    replacedMinerCount: normalizedReplacementMiners.length,
+    replacementMiners: normalizedReplacementMiners,
+    replaceText:
+      typeof replaceTextOverride === "string"
+        ? replaceTextOverride
+        : normalizedReplacementMiners.length > 0
+          ? buildReplacementSetLabel(normalizedReplacementMiners)
+          : "-",
+    purchaseMiners: normalizedPurchaseMiners,
+    purchaseCount,
+    imageUrl: leadMiner.imageUrl || "",
+    imageCandidates: Array.isArray(leadMiner.imageCandidates) ? [...leadMiner.imageCandidates] : [],
+    levelBadgeUrl: purchaseCount === 1 ? leadMiner.levelBadgeUrl || "" : "",
+    currency,
+    boughtPowerThs: safeBoughtPowerThs,
+    boughtBonusPercent: safeBoughtBonusPercent,
+    removedPowerThs: safeRemovedPowerThs,
+    removedBonusPercent: safeRemovedBonusPercent,
+    removedMask,
+    buyMask,
+    marketMinerIds: normalizedPurchaseMiners.map((miner) => String(miner?.id || "")),
+  };
+}
+
+function buildFilteredMarketMiners({
+  budget,
+  maxMinerPrice,
+  roomWidthMode,
+  roomMinersCacheSnapshot,
+  ownedRoomMinerKeys,
+}) {
+  return marketMinersCache
+    .filter((miner) => (budget === null ? true : miner.price <= budget))
+    .filter((miner) => (maxMinerPrice === null ? true : miner.price <= maxMinerPrice))
+    .filter((miner) => (roomWidthMode === "any" ? true : String(miner.width || "") === roomWidthMode))
+    .filter((miner) => (roomMinersCacheSnapshot.length === 0 ? true : !ownedRoomMinerKeys.has(getRoomMinerOwnershipKey(miner))));
+}
+
+function buildSingleRecommendationItems({
+  filteredMarketMiners,
+  currentSystem,
+  totalCurrentThs,
+  replacementEnabled,
+  roomReplacementSets,
+  sortMode,
+}) {
+  const replacementSetsByWidth = new Map();
+  roomReplacementSets.forEach((replacementSet) => {
+    const widthKey = Number(replacementSet?.width);
+    if (!Number.isFinite(widthKey) || widthKey <= 0) return;
+    const bucket = replacementSetsByWidth.get(widthKey) || [];
+    bucket.push(replacementSet);
+    replacementSetsByWidth.set(widthKey, bucket);
+  });
+
+  const singleItems = filteredMarketMiners
+    .map((miner) => {
+      const purchaseMiner = cloneMinerForRecommendation(miner);
+      const offerKey = getMarketMinerOfferKey(miner);
+      const sharedParams = {
+        currentSystem,
+        totalCurrentThs,
+        purchaseMiners: [purchaseMiner],
+        price: miner.price,
+        currency: miner.currency || "RLT",
+        boughtPowerThs: toThs(miner.power, "Ph/s"),
+        boughtBonusPercent: miner.bonusPercent,
+        sourceMinerId: miner.id,
+        offerKey,
+      };
+
+      if (!replacementEnabled) {
+        return buildRecommendationEntry(sharedParams);
+      }
+
+      const minerWidth = Number.isFinite(Number(miner.width)) ? Math.floor(Number(miner.width)) : null;
+      const replacementPool = minerWidth ? (replacementSetsByWidth.get(minerWidth) || []) : [];
+      let bestRecommendation = null;
+
+      replacementPool.forEach((replacementSet) => {
+        const candidateRecommendation = buildRecommendationEntry({
+          ...sharedParams,
+          replacementMiners: replacementSet.miners,
+          removedPowerThs: replacementSet.removedPowerThs,
+          removedBonusPercent: replacementSet.removedBonusPercent,
+          removedMask: replacementSet.removedMask,
+        });
+
+        if (
+          !bestRecommendation ||
+          compareByGainThenEfficiencyDesc(candidateRecommendation, bestRecommendation) < 0
+        ) {
+          bestRecommendation = candidateRecommendation;
+        }
+      });
+
+      if (bestRecommendation) {
+        return bestRecommendation;
+      }
+
+      return buildRecommendationEntry({
+        ...sharedParams,
+        replaceTextOverride: minerWidth
+          ? `No room miner found for width ${minerWidth}`
+          : "Width not detected",
+      });
+    })
+    .filter(Boolean);
+
+  return sortRecommendationItems(singleItems, sortMode);
+}
+
+function selectBudgetCombinationBuyPool(singleItems) {
+  const positiveSingles = singleItems.filter((miner) => hasMeaningfulPositiveGain(miner.gainPower));
+  const selected = new Map();
+  const addItems = (items) => {
+    items.forEach((item) => {
+      const offerKey = String(item.offerKey || "");
+      if (!offerKey || selected.has(offerKey)) return;
+      selected.set(offerKey, item);
+    });
+  };
+
+  addItems([...positiveSingles].sort((leftItem, rightItem) => compareByGainThenEfficiencyDesc(leftItem, rightItem))
+    .slice(0, BUDGET_COMBINATION_BUY_POOL_LIMIT));
+  addItems([...positiveSingles].sort((leftItem, rightItem) => compareRecommendationItems(leftItem, rightItem, "gainPerPrice"))
+    .slice(0, BUDGET_COMBINATION_BUY_POOL_LIMIT));
+  addItems([...positiveSingles]
+    .sort((leftItem, rightItem) => leftItem.price - rightItem.price || compareByGainThenEfficiencyDesc(leftItem, rightItem))
+    .slice(0, Math.max(18, Math.floor(BUDGET_COMBINATION_BUY_POOL_LIMIT / 3))));
+
+  return [...selected.values()].slice(0, BUDGET_COMBINATION_BUY_POOL_LIMIT);
+}
+
+function getReplacementSetLossEstimate(replacementSet, currentSystem) {
+  if (!replacementSet) return Number.POSITIVE_INFINITY;
+  return (
+    replacementSet.removedPowerThs * (1 + currentSystem.bonusPercent / 100) +
+    currentSystem.baseThs * (replacementSet.removedBonusPercent / 100)
+  );
+}
+
+function compareReplacementSetsByLoss(leftSet, rightSet, currentSystem) {
+  const leftLoss = getReplacementSetLossEstimate(leftSet, currentSystem);
+  const rightLoss = getReplacementSetLossEstimate(rightSet, currentSystem);
+
+  if (leftLoss !== rightLoss) return leftLoss - rightLoss;
+  if (leftSet.removedPowerThs !== rightSet.removedPowerThs) {
+    return leftSet.removedPowerThs - rightSet.removedPowerThs;
+  }
+  if (leftSet.removedBonusPercent !== rightSet.removedBonusPercent) {
+    return leftSet.removedBonusPercent - rightSet.removedBonusPercent;
+  }
+  return leftSet.miners.length - rightSet.miners.length;
+}
+
+function buildBudgetReplacementSetMap(currentSystem, maxWidth) {
+  const normalizedMaxWidth = Math.max(0, Math.floor(Number(maxWidth) || 0));
+  const replacementBuckets = new Map();
+  replacementBuckets.set(0, [{
+    width: 0,
+    miners: [],
+    removedPowerThs: 0,
+    removedBonusPercent: 0,
+    removedMask: 0n,
+    label: "-",
+  }]);
+
+  const roomMinerMaskById = new Map(
+    roomMinersCache.map((miner, index) => [String(miner?.id || `room-miner-${index + 1}`), 1n << BigInt(index)]),
+  );
+  const roomMinerEntries = roomMinersCache
+    .map((miner, index) => {
+      const width = Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : null;
+      if (!Number.isFinite(width) || width <= 0 || width > normalizedMaxWidth) return null;
+
+      return {
+        width,
+        miner,
+        removedPowerThs: toThs(miner.power, "Ph/s"),
+        removedBonusPercent: Number(miner.bonusPercent) || 0,
+        removedMask: roomMinerMaskById.get(String(miner?.id || `room-miner-${index + 1}`)) || 0n,
+      };
+    })
+    .filter(Boolean);
+
+  roomMinerEntries.forEach((roomEntry) => {
+    for (let width = normalizedMaxWidth - roomEntry.width; width >= 0; width -= 1) {
+      const sourceBucket = replacementBuckets.get(width) || [];
+      if (sourceBucket.length === 0) continue;
+
+      const nextWidth = width + roomEntry.width;
+      const nextBucket = replacementBuckets.get(nextWidth) || [];
+      sourceBucket.forEach((state) => {
+        if ((state.removedMask & roomEntry.removedMask) !== 0n) return;
+
+        nextBucket.push({
+          width: nextWidth,
+          miners: [...state.miners, roomEntry.miner],
+          removedPowerThs: state.removedPowerThs + roomEntry.removedPowerThs,
+          removedBonusPercent: state.removedBonusPercent + roomEntry.removedBonusPercent,
+          removedMask: state.removedMask | roomEntry.removedMask,
+          label: buildReplacementSetLabel([...state.miners, roomEntry.miner]),
+        });
+      });
+
+      const uniqueBucket = new Map();
+      nextBucket.forEach((state) => {
+        const bucketKey = state.removedMask.toString(16);
+        const existing = uniqueBucket.get(bucketKey);
+        if (!existing || compareReplacementSetsByLoss(state, existing, currentSystem) < 0) {
+          uniqueBucket.set(bucketKey, state);
+        }
+      });
+
+      replacementBuckets.set(
+        nextWidth,
+        [...uniqueBucket.values()]
+          .sort((leftSet, rightSet) => compareReplacementSetsByLoss(leftSet, rightSet, currentSystem))
+          .slice(0, BUDGET_COMBINATION_REPLACEMENT_SET_LIMIT),
+      );
+    }
+  });
+
+  const bestSetsByWidth = new Map();
+  replacementBuckets.forEach((bucket, width) => {
+    if (!Number.isFinite(Number(width)) || Number(width) <= 0 || !Array.isArray(bucket) || bucket.length === 0) return;
+    bestSetsByWidth.set(Number(width), bucket[0]);
+  });
+
+  return bestSetsByWidth;
+}
+
+function buildBudgetModeSingleItems({
+  filteredMarketMiners,
+  currentSystem,
+  totalCurrentThs,
+  replacementEnabled,
+  replacementSetsByWidth,
+  sortMode,
+}) {
+  const items = filteredMarketMiners
+    .map((miner) => {
+      const purchaseMiner = cloneMinerForRecommendation(miner);
+      const widthKey = Number.isFinite(Number(purchaseMiner.width)) ? Math.floor(Number(purchaseMiner.width)) : null;
+
+      if (replacementEnabled) {
+        const replacementSet = widthKey ? replacementSetsByWidth.get(widthKey) : null;
+        if (!replacementSet) return null;
+
+        return buildRecommendationEntry({
+          currentSystem,
+          totalCurrentThs,
+          purchaseMiners: [purchaseMiner],
+          replacementMiners: replacementSet.miners,
+          price: purchaseMiner.price,
+          currency: purchaseMiner.currency || "RLT",
+          boughtPowerThs: toThs(purchaseMiner.power, "Ph/s"),
+          boughtBonusPercent: purchaseMiner.bonusPercent,
+          removedPowerThs: replacementSet.removedPowerThs,
+          removedBonusPercent: replacementSet.removedBonusPercent,
+          removedMask: replacementSet.removedMask,
+          sourceMinerId: purchaseMiner.id,
+          offerKey: getMarketMinerOfferKey(purchaseMiner),
+        });
+      }
+
+      return buildRecommendationEntry({
+        currentSystem,
+        totalCurrentThs,
+        purchaseMiners: [purchaseMiner],
+        price: purchaseMiner.price,
+        currency: purchaseMiner.currency || "RLT",
+        boughtPowerThs: toThs(purchaseMiner.power, "Ph/s"),
+        boughtBonusPercent: purchaseMiner.bonusPercent,
+        sourceMinerId: purchaseMiner.id,
+        offerKey: getMarketMinerOfferKey(purchaseMiner),
+      });
+    })
+    .filter(Boolean);
+
+  return sortRecommendationItems(items, sortMode);
+}
+
+function buildBudgetCombinationOptions({
+  budget,
+  buyPool,
+}) {
+  const options = [];
+
+  buyPool.forEach((singleItem, buyIndex) => {
+    const purchaseMiner = singleItem?.purchaseMiners?.[0];
+    if (!purchaseMiner) return;
+
+    const price = Number(purchaseMiner.price);
+    if (!Number.isFinite(price) || price <= 0 || price > budget) return;
+
+    options.push({
+      purchaseMiners: [purchaseMiner],
+      price,
+      currency: purchaseMiner.currency || "RLT",
+      boughtPowerThs: toThs(purchaseMiner.power, "Ph/s"),
+      boughtBonusPercent: purchaseMiner.bonusPercent,
+      totalWidth: Number.isFinite(Number(purchaseMiner.width)) ? Math.floor(Number(purchaseMiner.width)) : 0,
+      offerKey: getMarketMinerOfferKey(purchaseMiner),
+      buyMask: 1n << BigInt(buyIndex),
+      atomicKey: `${getMarketMinerOfferKey(purchaseMiner)}::${buyIndex}`,
+    });
+  });
+
+  return options
+    .sort((leftItem, rightItem) => {
+      const leftEfficiency = leftItem.price > 0 ? leftItem.boughtPowerThs / leftItem.price : -Infinity;
+      const rightEfficiency = rightItem.price > 0 ? rightItem.boughtPowerThs / rightItem.price : -Infinity;
+      if (rightEfficiency !== leftEfficiency) return rightEfficiency - leftEfficiency;
+      if (rightItem.boughtPowerThs !== leftItem.boughtPowerThs) return rightItem.boughtPowerThs - leftItem.boughtPowerThs;
+      return leftItem.price - rightItem.price;
+    })
+    .slice(0, BUDGET_COMBINATION_OPTION_LIMIT)
+    .map((item, optionIndex) => ({
+      ...item,
+      optionIndex,
+    }));
+}
+
+function pruneBudgetCombinationStates(states) {
+  const uniqueStates = new Map();
+  states.forEach((state) => {
+    const uniqueKey = `${state.buyMask.toString(16)}:${state.totalWidth}`;
+    const existing = uniqueStates.get(uniqueKey);
+    if (!existing || compareByGainThenEfficiencyDesc(state.recommendation, existing.recommendation) < 0) {
+      uniqueStates.set(uniqueKey, state);
+    }
+  });
+
+  const dedupedStates = [...uniqueStates.values()];
+  const selectedStates = new Map();
+  const appendStates = (items, limit) => {
+    items.slice(0, limit).forEach((item) => {
+      if (!selectedStates.has(item.signature)) {
+        selectedStates.set(item.signature, item);
+      }
+    });
+  };
+
+  appendStates(
+    [...dedupedStates].sort((leftState, rightState) =>
+      compareByGainThenEfficiencyDesc(leftState.recommendation, rightState.recommendation)),
+    BUDGET_COMBINATION_STATE_LIMIT,
+  );
+  appendStates(
+    [...dedupedStates].sort((leftState, rightState) =>
+      compareRecommendationItems(leftState.recommendation, rightState.recommendation, "gainPerPrice")),
+    BUDGET_COMBINATION_STATE_LIMIT,
+  );
+  appendStates(
+    [...dedupedStates].sort((leftState, rightState) =>
+      leftState.recommendation.price - rightState.recommendation.price ||
+      compareByGainThenEfficiencyDesc(leftState.recommendation, rightState.recommendation)),
+    Math.max(40, Math.floor(BUDGET_COMBINATION_STATE_LIMIT / 2)),
+  );
+
+  return [...selectedStates.values()]
+    .sort((leftState, rightState) => compareByGainThenEfficiencyDesc(leftState.recommendation, rightState.recommendation))
+    .slice(0, BUDGET_COMBINATION_STATE_LIMIT);
+}
+
+function buildBudgetCombinationItems({
+  budget,
+  singleItems,
+  currentSystem,
+  totalCurrentThs,
+  replacementEnabled,
+  replacementSetsByWidth,
+  sortMode,
+}) {
+  if (!Number.isFinite(budget) || budget <= 0) {
+    return [];
+  }
+
+  const buyPool = selectBudgetCombinationBuyPool(singleItems);
+  const atomicOptions = buildBudgetCombinationOptions({
+    budget,
+    buyPool,
+  });
+
+  if (atomicOptions.length < 2) {
+    return [];
+  }
+
+  const minOptionPrice = Math.min(...atomicOptions.map((item) => item.price));
+  const maxDepth = Math.max(2, Math.min(5, Math.floor(budget / Math.max(minOptionPrice, 0.01))));
+  const bundleResults = new Map();
+  let frontier = [{
+    price: 0,
+    boughtPowerThs: 0,
+    boughtBonusPercent: 0,
+    buyMask: 0n,
+    totalWidth: 0,
+    purchaseMiners: [],
+    lastOptionIndex: -1,
+    atomicKeys: [],
+  }];
+
+  for (let depth = 1; depth <= maxDepth; depth += 1) {
+    const nextStates = [];
+
+    frontier.forEach((state) => {
+      for (let optionIndex = state.lastOptionIndex + 1; optionIndex < atomicOptions.length; optionIndex += 1) {
+        const option = atomicOptions[optionIndex];
+        if ((state.buyMask & option.buyMask) !== 0n) continue;
+
+        const totalPrice = state.price + option.price;
+        if (totalPrice > budget + 1e-9) continue;
+        const totalWidth = state.totalWidth + option.totalWidth;
+        const replacementSet = replacementEnabled ? replacementSetsByWidth.get(totalWidth) : null;
+        if (replacementEnabled && !replacementSet) continue;
+
+        const atomicKeys = [...state.atomicKeys, option.atomicKey];
+        const recommendation = buildRecommendationEntry({
+          currentSystem,
+          totalCurrentThs,
+          purchaseMiners: [...state.purchaseMiners, ...option.purchaseMiners],
+          replacementMiners: replacementSet?.miners || [],
+          price: totalPrice,
+          currency: option.currency || "RLT",
+          boughtPowerThs: state.boughtPowerThs + option.boughtPowerThs,
+          boughtBonusPercent: state.boughtBonusPercent + option.boughtBonusPercent,
+          removedPowerThs: replacementSet?.removedPowerThs || 0,
+          removedBonusPercent: replacementSet?.removedBonusPercent || 0,
+          removedMask: replacementSet?.removedMask || 0n,
+          buyMask: state.buyMask | option.buyMask,
+          entryType: "bundle",
+          sourceMinerId: "bundle",
+          bundleKey: atomicKeys.join("|"),
+        });
+
+        const nextState = {
+          price: totalPrice,
+          boughtPowerThs: state.boughtPowerThs + option.boughtPowerThs,
+          boughtBonusPercent: state.boughtBonusPercent + option.boughtBonusPercent,
+          buyMask: state.buyMask | option.buyMask,
+          totalWidth,
+          purchaseMiners: [...state.purchaseMiners, ...option.purchaseMiners],
+          lastOptionIndex: optionIndex,
+          atomicKeys,
+          signature: atomicKeys.join("|"),
+          recommendation,
+        };
+
+        nextStates.push(nextState);
+        if (depth > 1 && hasMeaningfulPositiveGain(recommendation.gainPower)) {
+          const existing = bundleResults.get(nextState.signature);
+          if (!existing || compareRecommendationItems(recommendation, existing, sortMode) < 0) {
+            bundleResults.set(nextState.signature, recommendation);
+          }
+        }
+      }
+    });
+
+    if (nextStates.length === 0) {
+      break;
+    }
+
+    frontier = pruneBudgetCombinationStates(nextStates);
+  }
+
+  return sortRecommendationItems([...bundleResults.values()], sortMode).slice(0, BUDGET_COMBINATION_RESULT_LIMIT);
+}
+
+function getRecommendationTotalWidth(recommendation) {
+  const purchaseMiners =
+    Array.isArray(recommendation?.purchaseMiners) && recommendation.purchaseMiners.length > 0
+      ? recommendation.purchaseMiners
+      : recommendation
+        ? [recommendation]
+        : [];
+
+  return purchaseMiners.reduce((totalWidth, miner) => {
+    const width = Number(miner?.width);
+    return Number.isFinite(width) && width > 0 ? totalWidth + Math.floor(width) : totalWidth;
+  }, 0);
+}
+
+function buildHoverReplacementSetMap(currentSystem, maxWidth) {
+  const normalizedMaxWidth = Math.max(0, Math.floor(Number(maxWidth) || 0));
+  const replacementBuckets = new Map();
+  replacementBuckets.set(0, [{
+    width: 0,
+    miners: [],
+    removedPowerThs: 0,
+    removedBonusPercent: 0,
+    removedMask: 0n,
+    label: "-",
+  }]);
+
+  const roomMinerMaskById = new Map(
+    roomMinersCache.map((miner, index) => [String(miner?.id || `room-miner-${index + 1}`), 1n << BigInt(index)]),
+  );
+  const roomMinerEntries = roomMinersCache
+    .map((miner, index) => {
+      const width = Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : null;
+      if (!Number.isFinite(width) || width <= 0 || width > 2 || width > normalizedMaxWidth) return null;
+
+      return {
+        width,
+        miner,
+        removedPowerThs: toThs(miner.power, "Ph/s"),
+        removedBonusPercent: Number(miner.bonusPercent) || 0,
+        removedMask: roomMinerMaskById.get(String(miner?.id || `room-miner-${index + 1}`)) || 0n,
+      };
+    })
+    .filter(Boolean);
+
+  roomMinerEntries.forEach((roomEntry) => {
+    for (let width = normalizedMaxWidth - roomEntry.width; width >= 0; width -= 1) {
+      const sourceBucket = replacementBuckets.get(width) || [];
+      if (sourceBucket.length === 0) continue;
+
+      const nextWidth = width + roomEntry.width;
+      const nextBucket = replacementBuckets.get(nextWidth) || [];
+      sourceBucket.forEach((state) => {
+        if ((state.removedMask & roomEntry.removedMask) !== 0n) return;
+
+        nextBucket.push({
+          width: nextWidth,
+          miners: [...state.miners, roomEntry.miner],
+          removedPowerThs: state.removedPowerThs + roomEntry.removedPowerThs,
+          removedBonusPercent: state.removedBonusPercent + roomEntry.removedBonusPercent,
+          removedMask: state.removedMask | roomEntry.removedMask,
+          label: buildReplacementSetLabel([...state.miners, roomEntry.miner]),
+        });
+      });
+
+      const uniqueBucket = new Map();
+      nextBucket.forEach((state) => {
+        const bucketKey = state.removedMask.toString(16);
+        const existing = uniqueBucket.get(bucketKey);
+        if (!existing || compareReplacementSetsByLoss(state, existing, currentSystem) < 0) {
+          uniqueBucket.set(bucketKey, state);
+        }
+      });
+
+      replacementBuckets.set(
+        nextWidth,
+        [...uniqueBucket.values()]
+          .sort((leftSet, rightSet) => compareReplacementSetsByLoss(leftSet, rightSet, currentSystem))
+          .slice(0, BUDGET_COMBINATION_REPLACEMENT_SET_LIMIT),
+      );
+    }
+  });
+
+  const bestSetsByWidth = new Map();
+  replacementBuckets.forEach((bucket, width) => {
+    if (!Number.isFinite(Number(width)) || Number(width) <= 0 || !Array.isArray(bucket) || bucket.length === 0) return;
+    bestSetsByWidth.set(Number(width), bucket[0]);
+  });
+
+  return bestSetsByWidth;
+}
+
+function formatMarketHoverReplacementMiner(miner) {
+  const levelText = miner?.level ? ` L${miner.level}` : "";
+  const powerText = formatPowerFromPhs(miner?.power);
+  const bonusText = `${formatMarketValue(Number(miner?.bonusPercent) || 0, 2)}%`;
+  return `
+    <li class="market-hover-tooltip-miner">
+      <span class="market-hover-tooltip-name">${escapeHtml(miner?.name || "Unknown")}${escapeHtml(levelText)}</span>
+      <span class="market-hover-tooltip-meta">${escapeHtml(powerText)} • ${escapeHtml(bonusText)}</span>
+    </li>
+  `;
+}
+
+function buildMarketHoverReplacementHtml(recommendation, currentSystem, hoverReplacementMap) {
+  const purchaseMiners =
+    Array.isArray(recommendation?.purchaseMiners) && recommendation.purchaseMiners.length > 0
+      ? recommendation.purchaseMiners
+      : recommendation
+        ? [recommendation]
+        : [];
+  const targetWidth = getRecommendationTotalWidth(recommendation);
+  const leadName = purchaseMiners[0]?.name || recommendation?.name || "market miner";
+  const title =
+    purchaseMiners.length > 1
+      ? `Remove room miners for bundle (${purchaseMiners.length})`
+      : `Remove room miners for ${leadName}`;
+
+  if (!currentSystem) {
+    return `
+      <div class="market-hover-tooltip-title">${escapeHtml(title)}</div>
+      <div class="market-hover-tooltip-empty">Current system is not available.</div>
+    `;
+  }
+
+  if (roomMinersCache.length === 0) {
+    return `
+      <div class="market-hover-tooltip-title">${escapeHtml(title)}</div>
+      <div class="market-hover-tooltip-empty">Load room miners to see replacement candidates.</div>
+    `;
+  }
+
+  if (!Number.isFinite(targetWidth) || targetWidth <= 0) {
+    return `
+      <div class="market-hover-tooltip-title">${escapeHtml(title)}</div>
+      <div class="market-hover-tooltip-empty">Width of the new miner is not detected.</div>
+    `;
+  }
+
+  const replacementSet = hoverReplacementMap.get(targetWidth);
+  if (!replacementSet || !Array.isArray(replacementSet.miners) || replacementSet.miners.length === 0) {
+    return `
+      <div class="market-hover-tooltip-title">${escapeHtml(title)}</div>
+      <div class="market-hover-tooltip-empty">No suitable room miners with width 1 or 2 were found for ${escapeHtml(String(targetWidth))} slot(s).</div>
+    `;
+  }
+
+  return `
+    <div class="market-hover-tooltip-title">${escapeHtml(title)}</div>
+    <div class="market-hover-tooltip-subtitle">Best exact fit among room miners with width 1 and 2: ${escapeHtml(String(targetWidth))} slot(s)</div>
+    <ul class="market-hover-tooltip-list">
+      ${replacementSet.miners.map((miner) => formatMarketHoverReplacementMiner(miner)).join("")}
+    </ul>
+  `;
+}
+
+function bindMarketHoverTooltips() {
+  if (!marketResultsBody) return;
+
+  marketResultsBody.querySelectorAll("tr[data-hover-tooltip-key]").forEach((row) => {
+    if (!(row instanceof HTMLTableRowElement)) return;
+    if (row.dataset.hoverTooltipBound === "1") return;
+    row.dataset.hoverTooltipBound = "1";
+
+    row.addEventListener("mouseenter", (event) => {
+      const tooltipKey = row.dataset.hoverTooltipKey || "";
+      showMarketHoverTooltip(marketHoverTooltipContent.get(tooltipKey) || "", event.clientX, event.clientY);
+    });
+
+    row.addEventListener("mousemove", (event) => {
+      positionMarketHoverTooltip(event.clientX, event.clientY);
+    });
+
+    row.addEventListener("mouseleave", () => {
+      hideMarketHoverTooltip();
+    });
+  });
+}
+
 function buildMarketRecommendations() {
   const budget = readOptionalInputNumber(marketBudgetInput);
   const maxMinerPrice = readOptionalInputNumber(marketMaxMinerPriceInput);
+  const recommendationMode = getMarketRecommendationMode();
   const replacementRequested = getMarketReplacementEnabled();
   const replacementStrategy = getMarketReplacementStrategy();
   const sortMode = getMarketSortMode();
@@ -2433,6 +3375,9 @@ function buildMarketRecommendations() {
   if (Number.isNaN(maxMinerPrice)) {
     throw new Error("Invalid max price value. Enter a non-negative number.");
   }
+  if (recommendationMode === "budget" && budget === null) {
+    throw new Error("Budget is required for budget combinations mode.");
+  }
   if (!currentSystem) {
     throw new Error("Current system is invalid. Sync RollerCoin power or enter valid base power and bonus.");
   }
@@ -2445,105 +3390,69 @@ function buildMarketRecommendations() {
   const overlappingOwnedCount = marketMinersCache.filter((miner) =>
     ownedRoomMinerKeys.has(getRoomMinerOwnershipKey(miner))).length;
   const roomReplacementSets = replacementEnabled ? buildRoomReplacementSets(replacementStrategy) : [];
-  const buildProjectedCandidate = (miner, replacementSet = null) => {
-    const minerPowerThs = toThs(miner.power, "Ph/s");
-    const removedPowerThs = replacementSet ? replacementSet.removedPowerThs : 0;
-    const removedBonusPercent = replacementSet ? replacementSet.removedBonusPercent : 0;
-    const projectedBaseThs = currentSystem.baseThs + minerPowerThs - removedPowerThs;
-    const projectedBonusPercent = currentSystem.bonusPercent + miner.bonusPercent - removedBonusPercent;
-    const projectedTotalThs = getCurrentTotal(projectedBaseThs, projectedBonusPercent);
-    const gainThs = projectedTotalThs - totalCurrentThs;
-    const gainPerPrice = miner.price > 0 ? gainThs / miner.price : NaN;
+  const filteredMarketMiners = buildFilteredMarketMiners({
+    budget,
+    maxMinerPrice,
+    roomWidthMode,
+    roomMinersCacheSnapshot: roomMinersCache,
+    ownedRoomMinerKeys,
+  });
+  const singleItems = buildSingleRecommendationItems({
+    filteredMarketMiners,
+    currentSystem,
+    totalCurrentThs,
+    replacementEnabled,
+    roomReplacementSets,
+    sortMode,
+  });
+  let filtered = singleItems;
+  let bundleItems = [];
 
-    return {
-      projectedBasePower: projectedBaseThs / POWER_MULTIPLIER["Ph/s"],
-      projectedBonusPercent,
-      projectedTotalPower: projectedTotalThs / POWER_MULTIPLIER["Ph/s"],
-      gainPower: gainThs / POWER_MULTIPLIER["Ph/s"],
-      gainPerPrice: Number.isFinite(gainPerPrice) ? gainPerPrice / POWER_MULTIPLIER["Ph/s"] : NaN,
-      replacedMinerName: replacementSet?.miners[0]?.name || "",
-      replacedMinerLevel: replacementSet?.miners[0]?.level ?? null,
-      replacedMinerWidth: replacementSet?.width ?? null,
-      replacedMinerCount: replacementSet?.miners?.length ?? 0,
-      replacementMiners: Array.isArray(replacementSet?.miners)
-        ? replacementSet.miners.map((replacementMiner) => ({
-          name: replacementMiner?.name || "Unknown",
-          level: replacementMiner?.level ?? null,
-          power: replacementMiner?.power ?? NaN,
-          bonusPercent: replacementMiner?.bonusPercent ?? NaN,
-          width: replacementMiner?.width ?? null,
-          imageUrl: replacementMiner?.imageUrl || "",
-          imageCandidates: Array.isArray(replacementMiner?.imageCandidates) ? replacementMiner.imageCandidates : [],
-          levelBadgeUrl: replacementMiner?.levelBadgeUrl || "",
-        }))
-        : [],
-      replaceText: replacementSet?.label || "-",
-    };
-  };
-
-  const filtered = marketMinersCache
-    .filter((miner) => (budget === null ? true : miner.price <= budget))
-    .filter((miner) => (maxMinerPrice === null ? true : miner.price <= maxMinerPrice))
-    .filter((miner) => (roomWidthMode === "any" ? true : String(miner.width || "") === roomWidthMode))
-    .filter((miner) => (roomMinersCache.length === 0 ? true : !ownedRoomMinerKeys.has(getRoomMinerOwnershipKey(miner))))
-    .map((miner) => {
-      let bestSwap = null;
-
-      if (!replacementEnabled) {
-        bestSwap = buildProjectedCandidate(miner);
-      } else {
-        const minerWidth = Number.isFinite(Number(miner.width)) ? Math.floor(Number(miner.width)) : null;
-        const replacementPool = minerWidth
-          ? roomReplacementSets.filter((set) => set.width === minerWidth)
-          : [];
-
-        replacementPool.forEach((replacementSet) => {
-          const candidateSwap = buildProjectedCandidate(miner, replacementSet);
-
-          if (
-            !bestSwap ||
-            candidateSwap.gainPower > bestSwap.gainPower ||
-            (
-              candidateSwap.gainPower === bestSwap.gainPower &&
-              candidateSwap.gainPerPrice > bestSwap.gainPerPrice
-            )
-          ) {
-            bestSwap = candidateSwap;
-          }
-        });
-
-        if (!bestSwap) {
-          bestSwap = {
-            ...buildProjectedCandidate(miner),
-            replaceText: minerWidth
-              ? `No room miner found for width ${minerWidth}`
-              : "Width not detected",
-          };
-        }
-      }
-
-      if (!bestSwap) return null;
-
-      return {
-        ...miner,
-        ...bestSwap,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => {
-      if (sortMode === "gainPower") {
-        if (b.gainPower !== a.gainPower) return b.gainPower - a.gainPower;
-        if (b.gainPerPrice !== a.gainPerPrice) return b.gainPerPrice - a.gainPerPrice;
-        return a.price - b.price;
-      }
-      if (b.gainPerPrice !== a.gainPerPrice) return b.gainPerPrice - a.gainPerPrice;
-      if (b.gainPower !== a.gainPower) return b.gainPower - a.gainPower;
-      return a.price - b.price;
+  if (recommendationMode === "budget") {
+    const positivePrices = filteredMarketMiners
+      .map((miner) => Number(miner?.price))
+      .filter((price) => Number.isFinite(price) && price > 0);
+    const minFilteredPrice = positivePrices.length > 0 ? Math.min(...positivePrices) : NaN;
+    const maxBudgetDepth =
+      Number.isFinite(minFilteredPrice) && minFilteredPrice > 0
+        ? Math.max(2, Math.min(5, Math.floor(budget / Math.max(minFilteredPrice, 0.01))))
+        : 2;
+    const maxMarketWidth = Math.max(
+      0,
+      ...filteredMarketMiners.map((miner) =>
+        (Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : 0)),
+    );
+    const replacementSetsByWidth =
+      replacementEnabled
+        ? buildBudgetReplacementSetMap(currentSystem, Math.max(maxMarketWidth * maxBudgetDepth, maxMarketWidth))
+        : new Map();
+    const budgetSingleItems = buildBudgetModeSingleItems({
+      filteredMarketMiners,
+      currentSystem,
+      totalCurrentThs,
+      replacementEnabled,
+      replacementSetsByWidth,
+      sortMode,
     });
+    bundleItems = buildBudgetCombinationItems({
+      budget,
+      singleItems: budgetSingleItems,
+      currentSystem,
+      totalCurrentThs,
+      replacementEnabled,
+      replacementSetsByWidth,
+      sortMode,
+    });
+    filtered = sortRecommendationItems([...budgetSingleItems, ...bundleItems], sortMode);
+  } else {
+    filtered = sortRecommendationItems(singleItems, sortMode);
+  }
+
+  const upgradeItems = filtered.filter((miner) => hasMeaningfulPositiveGain(miner.gainPower));
 
   return {
     allItems: filtered,
-    items: topN === null ? filtered : filtered.slice(0, topN),
+    items: topN === null ? upgradeItems : upgradeItems.slice(0, topN),
     budget,
     currentSystem,
     overlappingOwnedCount,
@@ -2554,16 +3463,20 @@ function buildMarketRecommendations() {
     replacementPendingRoomLoad,
     replacementRequested,
     replacementStrategy,
+    recommendationMode,
+    bundleCount: bundleItems.length,
+    recommendedCount: upgradeItems.length,
     sortMode,
     topN,
     totalMatched: filtered.length,
+    upgradeItems,
   };
 }
 
 function updateMarketRecommendationsView(statusMessage = "Recommendations updated.", tone = "success") {
   const recommendations = buildMarketRecommendations();
-  renderMarketRecommendations(recommendations.items);
-  renderRoomReplacementSuggestions(recommendations.allItems, recommendations);
+  renderMarketRecommendations(recommendations.items, recommendations);
+  renderRoomReplacementSuggestions(recommendations.upgradeItems, recommendations);
 
   const budgetText = recommendations.budget === null ? "not set" : formatMarketValue(recommendations.budget, 2);
   const maxPriceText =
@@ -2574,9 +3487,11 @@ function updateMarketRecommendationsView(statusMessage = "Recommendations update
     marketSourceInfo && Number.isFinite(Number(marketSourceInfo.loadedAt))
       ? formatMarketDateTime(marketSourceInfo.loadedAt)
       : "unknown";
-  const currentBaseText = `${formatMarketValue(recommendations.currentSystem.basePhs, 6)} Ph/s`;
+  const currentBaseText = formatPowerFromPhs(recommendations.currentSystem.basePhs);
   const currentBonusText = `${formatMarketValue(recommendations.currentSystem.bonusPercent, 2)}%`;
   const sortModeText = recommendations.sortMode === "gainPower" ? "gain to system" : "gain per RLT";
+  const recommendationModeText =
+    recommendations.recommendationMode === "budget" ? "budget combinations" : "single purchase";
   const roomWidthText =
     recommendations.roomWidthMode === "1"
       ? "small only"
@@ -2585,17 +3500,19 @@ function updateMarketRecommendationsView(statusMessage = "Recommendations update
         : "any";
   const replacementText =
     recommendations.replacementEnabled
-      ? recommendations.replacementStrategy === "flex"
-        ? "on (flex)"
-        : "on (strict)"
+      ? recommendations.recommendationMode === "budget"
+        ? "on (budget slots)"
+        : recommendations.replacementStrategy === "flex"
+          ? "on (flex)"
+          : "on (strict)"
       : recommendations.replacementPendingRoomLoad
         ? "pending room miners"
         : "off";
 
   if (marketSummary) {
     marketSummary.textContent =
-      `Matched: ${recommendations.totalMatched}; budget: ${budgetText}; max price/miner: ${maxPriceText}; ` +
-      `sort: ${sortModeText}; room miners: ${recommendations.roomMinersCount}; hidden owned: ${recommendations.overlappingOwnedCount}; width: ${roomWidthText}; replacement: ${replacementText}; ` +
+      `Matched: ${recommendations.totalMatched}; profitable upgrades: ${recommendations.recommendedCount}; budget: ${budgetText}; max price/miner: ${maxPriceText}; ` +
+      `sort: ${sortModeText}; mode: ${recommendationModeText}; bundles: ${recommendations.bundleCount}; room miners: ${recommendations.roomMinersCount}; hidden owned: ${recommendations.overlappingOwnedCount}; width: ${roomWidthText}; replacement: ${replacementText}; ` +
       `current base: ${currentBaseText}; current bonus: ${currentBonusText}; ` +
       `source: ${sourceText}; path: ${sourcePathText}; updated: ${loadedAtText}.`;
   }
@@ -2609,6 +3526,7 @@ function renderRoomReplacementSuggestions(recommendations = [], context = null) 
 
   const items = Array.isArray(recommendations) ? recommendations : [];
   const actionableSuggestions = items
+    .filter((miner) => hasMeaningfulPositiveGain(miner?.gainPower))
     .filter((miner) => typeof miner?.replaceText === "string")
     .filter((miner) => miner.replaceText && miner.replaceText !== "-")
     .filter((miner) => !/^No room miner found/i.test(miner.replaceText))
@@ -2647,7 +3565,7 @@ function renderRoomReplacementSuggestions(recommendations = [], context = null) 
   const formatMinerMeta = (miner, tone = "buy") => {
     const levelText = miner.level ? ` L${miner.level}` : "";
     const widthText = Number.isFinite(Number(miner.width)) ? ` [${Math.floor(Number(miner.width))}]` : "";
-    const powerText = `${formatMarketValue(miner.power, 6)} Ph/s`;
+    const powerText = formatPowerFromPhs(miner.power);
     const bonusValue = Number(miner.bonusPercent);
     const bonusClass = bonusValue > 0 ? "positive" : bonusValue < 0 ? "negative" : "muted";
     const bonusText = `${formatMarketValue(miner.bonusPercent, 2)}% bonus`;
@@ -2667,8 +3585,15 @@ function renderRoomReplacementSuggestions(recommendations = [], context = null) 
 
   const formatSuggestion = (miner, index) => {
     const priceText = `${formatMarketValue(miner.price, 2)} ${miner.currency || "RLT"}`;
-    const gainText = `+${formatMarketValue(miner.gainPower, 6)} Ph/s`;
-    const buyText = formatMinerMeta(miner, "buy");
+    const gainText = `+${formatPowerFromPhs(miner.gainPower)}`;
+    const buyMiners =
+      Array.isArray(miner.purchaseMiners) && miner.purchaseMiners.length > 0
+        ? miner.purchaseMiners
+        : [miner];
+    const buyText =
+      buyMiners.length > 0
+        ? `<div class="suggestion-buy-list">${buyMiners.map((purchaseMiner) => formatMinerMeta(purchaseMiner, "buy")).join("")}</div>`
+        : escapeHtml(miner.name || "Marketplace miner");
     const removeText =
       Array.isArray(miner.replacementMiners) && miner.replacementMiners.length > 0
         ? `<div class="suggestion-remove-list">${miner.replacementMiners.map((replacementMiner) => formatMinerMeta(replacementMiner, "remove")).join("")}</div>`
@@ -2742,18 +3667,26 @@ function renderRoomReplacementSuggestions(recommendations = [], context = null) 
 
 function renderMarketRecommendations(recommendations, options = {}) {
   if (!marketResultsBody) return;
-  const resetPagination = options.resetPagination !== false;
+  const renderOptions = { ...lastRenderedMarketRecommendationsOptions, ...(options || {}) };
+  const resetPagination = renderOptions.resetPagination !== false;
+  hideMarketHoverTooltip();
+  marketHoverTooltipContent = new Map();
 
   if (resetPagination) {
     visibleMarketResultsCount = TABLE_RENDER_BATCH_SIZE;
   }
 
   lastRenderedMarketRecommendations = Array.isArray(recommendations) ? [...recommendations] : [];
+  lastRenderedMarketRecommendationsOptions = renderOptions;
 
   if (recommendations.length === 0) {
+    const emptyMessage =
+      Number.isFinite(renderOptions.totalMatched) && renderOptions.totalMatched > 0
+        ? "No profitable market upgrades match the current filters."
+        : "No market miners match the current filters.";
     marketResultsBody.innerHTML = `
       <tr>
-        <td colspan="8" class="muted">No market miners match the current filters.</td>
+        <td colspan="8" class="muted">${emptyMessage}</td>
       </tr>
     `;
     renderRoomReplacementSuggestions([]);
@@ -2768,44 +3701,73 @@ function renderMarketRecommendations(recommendations, options = {}) {
   }
 
   const visibleRecommendations = recommendations.slice(0, visibleMarketResultsCount);
+  const currentSystem = renderOptions && typeof renderOptions.currentSystem === "object" ? renderOptions.currentSystem : null;
+  const maxHoverWidth = visibleRecommendations.reduce(
+    (maxWidth, recommendation) => Math.max(maxWidth, getRecommendationTotalWidth(recommendation)),
+    0,
+  );
+  const hoverReplacementMap =
+    currentSystem && maxHoverWidth > 0 ? buildHoverReplacementSetMap(currentSystem, maxHoverWidth) : new Map();
 
   marketResultsBody.innerHTML = visibleRecommendations
     .map((miner, index) => {
       const actualIndex = index + 1;
+      const tooltipKey = `market-hover-${actualIndex}-${String(miner.bundleKey || miner.offerKey || index)}`;
+      marketHoverTooltipContent.set(
+        tooltipKey,
+        buildMarketHoverReplacementHtml(miner, currentSystem, hoverReplacementMap),
+      );
+      const purchaseMiners =
+        Array.isArray(miner.purchaseMiners) && miner.purchaseMiners.length > 0
+          ? miner.purchaseMiners
+          : [miner];
+      const leadMiner = purchaseMiners[0] || miner;
       const currency = escapeHtml(miner.currency || "RLT");
-      const hasImage = typeof miner.imageUrl === "string" && miner.imageUrl.length > 0;
-      const hasLevelBadge = typeof miner.levelBadgeUrl === "string" && miner.levelBadgeUrl.length > 0;
-      const imageFallbacks = Array.isArray(miner.imageCandidates)
-        ? miner.imageCandidates.filter((candidate) => candidate && candidate !== miner.imageUrl)
+      const hasImage = typeof leadMiner.imageUrl === "string" && leadMiner.imageUrl.length > 0;
+      const hasLevelBadge = typeof leadMiner.levelBadgeUrl === "string" && leadMiner.levelBadgeUrl.length > 0;
+      const imageFallbacks = Array.isArray(leadMiner.imageCandidates)
+        ? leadMiner.imageCandidates.filter((candidate) => candidate && candidate !== leadMiner.imageUrl)
         : [];
       const fallbackAttr =
         hasImage && imageFallbacks.length > 0
           ? ` data-fallbacks="${escapeHtml(encodeURIComponent(JSON.stringify(imageFallbacks)))}"`
           : "";
+      const titleText =
+        purchaseMiners.length === 1
+          ? leadMiner.name
+          : `Bundle (${purchaseMiners.length}): ${purchaseMiners.map((purchaseMiner) => purchaseMiner.name).join(" + ")}`;
+      const subtitleText =
+        purchaseMiners.length === 1
+          ? `${formatMarketValue(miner.bonusPercent, 2)}% bonus`
+          : `Buy ${purchaseMiners.length} miners, widths ${escapeHtml(miner.widthDisplay || "-")}`;
+      const widthText = escapeHtml(miner.widthDisplay || miner.width || "-");
       const imagePart = hasImage
         ? `<div class="market-miner-thumb-wrap">
-             <img class="market-miner-thumb" src="${escapeHtml(miner.imageUrl)}" alt="${escapeHtml(miner.name)}" loading="lazy"${fallbackAttr} />
-             ${hasLevelBadge ? `<img class="market-miner-level-badge" src="${escapeHtml(miner.levelBadgeUrl)}" alt="Level ${escapeHtml(miner.level || "")}" loading="lazy" />` : ""}
+             <img class="market-miner-thumb" src="${escapeHtml(leadMiner.imageUrl)}" alt="${escapeHtml(titleText)}" loading="lazy"${fallbackAttr} />
+             ${hasLevelBadge ? `<img class="market-miner-level-badge" src="${escapeHtml(leadMiner.levelBadgeUrl)}" alt="Level ${escapeHtml(leadMiner.level || "")}" loading="lazy" />` : ""}
            </div>`
         : `<div class="market-miner-thumb-wrap">
-             <div class="market-miner-thumb placeholder">${escapeHtml((miner.name || "M").slice(0, 1).toUpperCase())}</div>
-             ${hasLevelBadge ? `<img class="market-miner-level-badge" src="${escapeHtml(miner.levelBadgeUrl)}" alt="Level ${escapeHtml(miner.level || "")}" loading="lazy" />` : ""}
+             <div class="market-miner-thumb placeholder">${escapeHtml((titleText || "M").slice(0, 1).toUpperCase())}</div>
+             ${hasLevelBadge ? `<img class="market-miner-level-badge" src="${escapeHtml(leadMiner.levelBadgeUrl)}" alt="Level ${escapeHtml(leadMiner.level || "")}" loading="lazy" />` : ""}
            </div>`;
       return `
-        <tr>
+        <tr data-hover-tooltip-key="${escapeHtml(tooltipKey)}">
           <td>${actualIndex}</td>
           <td>
             <div class="market-miner-cell">
               ${imagePart}
-              <span>${escapeHtml(miner.name)}</span>
+              <div class="market-miner-copy">
+                <span>${escapeHtml(titleText)}</span>
+                <span class="market-miner-subcopy">${subtitleText}</span>
+              </div>
             </div>
           </td>
           <td>${formatMarketValue(miner.price, 2)} ${currency}</td>
-          <td>${formatMarketValue(miner.power, 3)}</td>
+          <td>${formatPowerFromPhs(miner.power)}</td>
           <td>${formatMarketValue(miner.bonusPercent, 2)}%</td>
-          <td>${escapeHtml(miner.width || "-")}</td>
-          <td>${formatMarketValue(miner.gainPower, 6)}</td>
-          <td>${formatMarketValue(miner.gainPerPrice, 6)}</td>
+          <td>${widthText}</td>
+          <td>${formatPowerFromPhs(miner.gainPower)}</td>
+          <td>${formatPowerFromPhs(miner.gainPerPrice)}</td>
         </tr>
       `;
     })
@@ -2819,6 +3781,7 @@ function renderMarketRecommendations(recommendations, options = {}) {
     itemLabel: "market results",
   });
   bindMarketImageFallbacks();
+  bindMarketHoverTooltips();
 }
 
 function bindMarketImageFallbacks() {
@@ -3041,6 +4004,7 @@ function buildCandidateRow() {
     <td><input type="number" min="0" step="0.001" class="cand-power" /></td>
     <td>
       <select class="cand-unit">
+        <option>Gh/s</option>
         <option>Th/s</option>
         <option selected>Ph/s</option>
         <option>Eh/s</option>
@@ -3077,6 +4041,11 @@ function addCandidate() {
 
 function getCurrentTotal(baseThs, bonusPercent) {
   return baseThs * (1 + bonusPercent / 100);
+}
+
+function hasMeaningfulPositiveGain(gainPowerPhs) {
+  if (!Number.isFinite(gainPowerPhs)) return false;
+  return gainPowerPhs > (MIN_RECOMMENDATION_GAIN_THS / POWER_MULTIPLIER["Ph/s"]);
 }
 
 function updateCurrentStats() {
@@ -3297,6 +4266,25 @@ function recalculateLive() {
   calculate();
 }
 
+function refreshPowerUnitViews() {
+  updatePowerUnitLabels();
+  recalculateLive();
+  renderRoomMinersCollection(roomMinersCache, { resetPagination: false });
+
+  if (marketMinersCache.length === 0) {
+    if (lastRenderedMarketRecommendations.length > 0) {
+      renderMarketRecommendations(lastRenderedMarketRecommendations, { resetPagination: false });
+    }
+    return;
+  }
+
+  try {
+    updateMarketRecommendationsView("Display unit updated.", "success");
+  } catch (error) {
+    setMarketStatus(`Filter error: ${error.message}`, "error");
+  }
+}
+
 async function initializeRollercoinSessionState() {
   await checkRollercoinAuthStatus({ silent: true });
   await refreshCurrentPowerFromRollercoin({ silent: true, allowUnauthenticated: true });
@@ -3337,6 +4325,11 @@ if (marketSortModeInput) {
     }
   });
 }
+if (displayPowerUnitInput) {
+  displayPowerUnitInput.addEventListener("change", () => {
+    refreshPowerUnitViews();
+  });
+}
 if (roomMinersSortModeInput) {
   roomMinersSortModeInput.addEventListener("change", () => {
     saveMarketSettings();
@@ -3355,6 +4348,17 @@ if (marketRoomWidthModeInput) {
     if (marketMinersCache.length === 0) return;
     try {
       updateMarketRecommendationsView("Market width filter updated.", "success");
+    } catch (error) {
+      setMarketStatus(`Filter error: ${error.message}`, "error");
+    }
+  });
+}
+if (marketRecommendationModeInput) {
+  marketRecommendationModeInput.addEventListener("change", () => {
+    saveMarketSettings();
+    if (marketMinersCache.length === 0) return;
+    try {
+      updateMarketRecommendationsView("Recommendation mode updated.", "success");
     } catch (error) {
       setMarketStatus(`Filter error: ${error.message}`, "error");
     }
@@ -3442,6 +4446,7 @@ document.addEventListener("change", (event) => {
 
 restoreCurrentSystem();
 restoreMarketSettings();
+updatePowerUnitLabels();
 restoreMarketMinersCache();
 bindMarketProgressListener();
 addCandidate();
