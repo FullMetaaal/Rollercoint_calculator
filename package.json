@@ -1,6 +1,6 @@
 {
   "name": "roller-coin-calculator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Electron calculator for RollerCoin miner choice",
   "main": "main.js",
   "scripts": {

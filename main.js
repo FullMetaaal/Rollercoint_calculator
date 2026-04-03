@@ -134,6 +134,7 @@ if (!hasSingleInstanceLock) {
 function logAutoUpdate(message, extra = null) {
   const suffix = extra ? ` ${JSON.stringify(extra)}` : "";
   console.info(`[auto-update] ${message}${suffix}`);
+  writeStartupLog(`[auto-update] ${message}`, extra);
 }
 
 function getAutoUpdater() {
@@ -245,13 +246,8 @@ function setupAutoUpdater() {
 }
 
 function scheduleAutoUpdateCheck() {
-  if (!app.isPackaged) {
-    return;
-  }
-
-  setTimeout(() => {
-    triggerAutoUpdateCheck({ manual: false });
-  }, 15000);
+  // Keep startup deterministic in packaged builds. Update checks are available
+  // via the explicit UI action instead of running automatically on launch.
 }
 
 function triggerAutoUpdateCheck({ manual = false } = {}) {
