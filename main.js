@@ -49,11 +49,15 @@ function ensureDirSafe(dirPath) {
   }
 }
 
+function getRoamingAppDataPath() {
+  return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+}
+
 function configureStoragePaths() {
   try {
     const userDataPath = app.isPackaged
-      ? path.join(app.getPath("appData"), "roller-coin-calculator")
-      : path.join(__dirname, ".electron-user-data-dev");
+      ? path.join(getRoamingAppDataPath(), "roller-coin-calculator")
+      : path.join(getRoamingAppDataPath(), "roller-coin-calculator-dev");
     if (ensureDirSafe(userDataPath)) {
       app.setPath("userData", userDataPath);
       writeStartupLog("Configured userData path.", { userDataPath });
@@ -65,7 +69,7 @@ function configureStoragePaths() {
   try {
     const cacheBasePath = app.isPackaged
       ? path.join(app.getPath("temp"), "roller-coin-calculator-cache")
-      : path.join(__dirname, ".electron-cache-dev");
+      : path.join(app.getPath("temp"), "roller-coin-calculator-dev-cache");
     const httpCachePath = path.join(cacheBasePath, "http-cache");
     const gpuCachePath = path.join(cacheBasePath, "gpu-cache");
 
