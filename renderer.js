@@ -3953,8 +3953,11 @@ async function handleRollercoinLogin() {
         `Session captured (${loginResult.cookieCount} cookies). You can now load market miners.`,
         "success",
       );
-      await checkRollercoinAuthStatus({ silent: true });
-      await refreshCurrentPowerFromRollercoin({ silent: true, allowUnauthenticated: true });
+      await Promise.allSettled([
+        checkRollercoinAuthStatus({ silent: true }),
+        refreshCurrentPowerFromRollercoin({ silent: true, allowUnauthenticated: true }),
+        loadRoomMinersFromRollercoin({ silent: true, allowUnauthenticated: true }),
+      ]);
     } else {
       setAuthIndicatorState("invalid", "No RollerCoin session detected. Login again and close the auth window.");
       setMarketStatus("No cookies found. Login again and close the auth window.", "error");
@@ -4377,9 +4380,11 @@ function refreshPowerUnitViews() {
 }
 
 async function initializeRollercoinSessionState() {
-  await checkRollercoinAuthStatus({ silent: true });
-  await refreshCurrentPowerFromRollercoin({ silent: true, allowUnauthenticated: true });
-  await loadRoomMinersFromRollercoin({ silent: true, allowUnauthenticated: true });
+  await Promise.allSettled([
+    checkRollercoinAuthStatus({ silent: true }),
+    refreshCurrentPowerFromRollercoin({ silent: true, allowUnauthenticated: true }),
+    loadRoomMinersFromRollercoin({ silent: true, allowUnauthenticated: true }),
+  ]);
 }
 
 addCandidateBtn.addEventListener("click", () => {

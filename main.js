@@ -1,9 +1,11 @@
 ﻿const { app, BrowserWindow, Menu, ipcMain, session } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const fs = require("fs");
 const https = require("https");
 const path = require("path");
 
 let mainWindow;
+let autoUpdaterConfigured = false;
 const ROLLERCOIN_PARTITION = "persist:rollercoin-auth";
 const ENABLE_INTERACTIVE_MARKET_SCANNER = true;
 const MARKET_PAGE_LIMIT = 100;
@@ -89,6 +91,100 @@ configureStoragePaths();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
+}
+
+function logAutoUpdate(message, extra = null) {
+  const suffix = extra ? ` ${JSON.stringify(extra)}` : "";
+  console.info(`[auto-update] ${message}${suffix}`);
+}
+
+function setupAutoUpdater() {
+  if (autoUpdaterConfigured || !app.isPackaged) {
+    return;
+  }
+
+  autoUpdaterConfigured = true;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("checking-for-update", () => {
+    logAutoUpdate("Checking for updates...");
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    logAutoUpdate("Update available.", {
+      version: info?.version || null,
+      files: Array.isArray(info?.files) ? info.files.length : 0,
+    });
+  });
+
+  autoUpdater.on("update-not-available", (info) => {
+    logAutoUpdate("No updates available.", {
+      version: info?.version || app.getVersion(),
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    logAutoUpdate("Download progress.", {
+      percent: Number.isFinite(Number(progress?.percent)) ? Number(progress.percent).toFixed(1) : null,
+      transferred: progress?.transferred || 0,
+      total: progress?.total || 0,
+    });
+  });
+
+  autoUpdater.on("error", (error) => {
+    logAutoUpdate("Auto-update error.", {
+      message: error?.message || String(error),
+    });
+  });
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    logAutoUpdate("Update downloaded.", {
+      version: info?.version || null,
+    });
+
+    const targetWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const { dialog } = require("electron");
+    const dialogOptions = {
+      type: "info",
+      buttons: ["Restart and Install", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      title: "Update Ready",
+      message: `Version ${info?.version || "new"} has been downloaded.`,
+      detail: "Restart the app now to install the update.",
+    };
+
+    try {
+      const result = targetWindow
+        ? await dialog.showMessageBox(targetWindow, dialogOptions)
+        : await dialog.showMessageBox(dialogOptions);
+
+      if (result.response === 0) {
+        setImmediate(() => {
+          autoUpdater.quitAndInstall(false, true);
+        });
+      }
+    } catch (error) {
+      logAutoUpdate("Failed to show update dialog.", {
+        message: error?.message || String(error),
+      });
+    }
+  });
+}
+
+function scheduleAutoUpdateCheck() {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((error) => {
+      logAutoUpdate("Failed to check for updates.", {
+        message: error?.message || String(error),
+      });
+    });
+  }, 15000);
 }
 
 function createWindow() {
@@ -492,6 +588,33 @@ function buildRollercoinRoomConfigEndpoint(roomConfigRef = "") {
   return roomConfigId
     ? `https://rollercoin.com/api/game/room-config/${encodeURIComponent(roomConfigId)}`
     : "https://rollercoin.com/api/game/room-config/";
+}
+
+function extractRollercoinProfileId(payload) {
+  const root = payload && typeof payload === "object" ? (payload.data ?? payload) : null;
+  if (!root || typeof root !== "object") {
+    throw new Error("RollerCoin profile API returned an invalid payload.");
+  }
+
+  const profileId = [
+    root.id,
+    root._id,
+    root.user_id,
+    root.userId,
+    getByPath(root, "user.id"),
+    getByPath(root, "user._id"),
+    getByPath(root, "user.user_id"),
+    getByPath(root, "profile.id"),
+    getByPath(root, "profile._id"),
+  ]
+    .map((value) => (value === null || value === undefined ? "" : String(value).trim()))
+    .find(Boolean) || "";
+
+  if (!profileId) {
+    throw new Error("RollerCoin profile API did not provide a valid profile id.");
+  }
+
+  return profileId;
 }
 
 function extractRollercoinRoomMinersPayload(payload) {
@@ -4598,8 +4721,272 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
     typeof preferredCookieHeader === "string" && preferredCookieHeader.trim()
       ? preferredCookieHeader.trim()
       : sessionInfo.cookieHeader;
-  const endpoint = buildRollercoinRoomConfigEndpoint(roomConfigRef);
-  const roomConfigId = parseRoomConfigReference(roomConfigRef);
+  const explicitRoomConfigId = parseRoomConfigReference(roomConfigRef);
+  let resolvedProfileId = "";
+  let profileAttempts = [];
+
+  if (!explicitRoomConfigId) {
+    const profileEndpoint = "https://rollercoin.com/api/profile/user-profile-data";
+
+    if (cookieHeader) {
+      try {
+        const directProfileResponse = await requestJsonWithCookieHeader(profileEndpoint, cookieHeader);
+        if (
+          directProfileResponse.statusCode >= 200 &&
+          directProfileResponse.statusCode < 300 &&
+          directProfileResponse.json
+        ) {
+          resolvedProfileId = extractRollercoinProfileId(directProfileResponse.json);
+        }
+      } catch {
+        // Fall through to browser-session fallback.
+      }
+    }
+
+    if (!resolvedProfileId) {
+      const profileWorker = new BrowserWindow({
+        show: false,
+        width: 1100,
+        height: 800,
+        autoHideMenuBar: true,
+        title: "RollerCoin Profile Worker",
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+          partition: ROLLERCOIN_PARTITION,
+        },
+      });
+
+      try {
+        await runWithTimeout(
+          profileWorker.loadURL("https://rollercoin.com/"),
+          15000,
+          "Profile worker bootstrap timeout (15s).",
+        );
+
+        const rawProfile = await runWithTimeout(
+          profileWorker.webContents.executeJavaScript(
+            `
+            (async () => {
+              const REQUEST_TIMEOUT_MS = 5000;
+              const endpoint = "https://rollercoin.com/api/profile/user-profile-data";
+              const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+              const fetchWithTimeout = async (url, options, timeoutMs) => {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), timeoutMs);
+                try {
+                  return await fetch(url, {
+                    ...options,
+                    signal: controller.signal,
+                  });
+                } finally {
+                  clearTimeout(timer);
+                }
+              };
+
+              const tokenCandidates = [];
+              try {
+                for (let index = 0; index < localStorage.length; index += 1) {
+                  const key = localStorage.key(index);
+                  const value = localStorage.getItem(key);
+                  if (!value) continue;
+                  const lowerKey = String(key).toLowerCase();
+                  if (/token|auth|jwt|access/.test(lowerKey) || /^eyJ[A-Za-z0-9_-]+\\./.test(value)) {
+                    tokenCandidates.push({ key, value });
+                  }
+                }
+              } catch {
+                // Ignore localStorage access issues.
+              }
+
+              const normalizeTokenValues = (value) => {
+                if (!value) return [];
+                const collected = [];
+                const pushIfValid = (candidate) => {
+                  if (typeof candidate !== "string") return;
+                  const trimmed = candidate.trim().replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
+                  if (!trimmed) return;
+                  if (/^Bearer\\s+/i.test(trimmed)) {
+                    collected.push(trimmed);
+                    collected.push(trimmed.replace(/^Bearer\\s+/i, ""));
+                    return;
+                  }
+                  collected.push(trimmed);
+                };
+
+                pushIfValid(value);
+                try {
+                  const parsed = JSON.parse(value);
+                  const queue = [parsed];
+                  const seen = new WeakSet();
+                  while (queue.length > 0) {
+                    const current = queue.shift();
+                    if (!current) continue;
+                    if (typeof current === "string") {
+                      pushIfValid(current);
+                      continue;
+                    }
+                    if (Array.isArray(current)) {
+                      current.forEach((entry) => {
+                        if (typeof entry === "string") {
+                          pushIfValid(entry);
+                        } else if (entry && typeof entry === "object" && !seen.has(entry)) {
+                          seen.add(entry);
+                          queue.push(entry);
+                        }
+                      });
+                      continue;
+                    }
+                    if (typeof current === "object") {
+                      Object.entries(current).forEach(([key, entry]) => {
+                        if (/token|auth|jwt|access/i.test(String(key))) {
+                          if (typeof entry === "string") {
+                            pushIfValid(entry);
+                          } else if (entry && typeof entry === "object" && !seen.has(entry)) {
+                            seen.add(entry);
+                            queue.push(entry);
+                          }
+                        }
+                      });
+                    }
+                  }
+                } catch {
+                  // Ignore non-JSON token values.
+                }
+
+                return [...new Set(collected)];
+              };
+
+              const uniqueTokens = [];
+              const seenTokens = new Set();
+              for (const item of tokenCandidates) {
+                const normalizedValues = normalizeTokenValues(item.value);
+                normalizedValues.forEach((value) => {
+                  if (!value || seenTokens.has(value)) return;
+                  seenTokens.add(value);
+                  uniqueTokens.push(value);
+                });
+              }
+
+              const headerVariants = [{ label: "cookie-only", headers: {} }];
+              uniqueTokens.forEach((token) => {
+                const clean = token.replace(/^Bearer\\s+/i, "");
+                headerVariants.push({ label: "authorization-bearer", headers: { Authorization: "Bearer " + clean } });
+                headerVariants.push({ label: "authorization-raw", headers: { Authorization: token } });
+                headerVariants.push({ label: "x-access-token", headers: { "x-access-token": clean } });
+                headerVariants.push({ label: "x-auth-token", headers: { "x-auth-token": clean } });
+                headerVariants.push({ label: "token", headers: { token: clean } });
+              });
+
+              const attempts = [];
+              for (let pass = 1; pass <= 3; pass += 1) {
+                for (const variant of headerVariants) {
+                  try {
+                    const response = await fetchWithTimeout(endpoint, {
+                      method: "GET",
+                      credentials: "include",
+                      cache: "no-store",
+                      headers: {
+                        Accept: "application/json, text/plain, */*",
+                        "Cache-Control": "no-cache",
+                        Pragma: "no-cache",
+                        ...variant.headers,
+                      },
+                    }, REQUEST_TIMEOUT_MS);
+
+                    const text = await response.text();
+                    let json = null;
+                    try {
+                      json = JSON.parse(text);
+                    } catch {
+                      // Keep text-only failures out of the success path.
+                    }
+
+                    attempts.push({
+                      step: "user-profile-response",
+                      pass,
+                      variant: variant.label,
+                      status: response.status,
+                    });
+
+                    if (response.ok && json && typeof json === "object") {
+                      return {
+                        success: true,
+                        json,
+                        selectedAuthVariant: variant.label,
+                        tokenCount: uniqueTokens.length,
+                        attempts,
+                      };
+                    }
+                  } catch (error) {
+                    attempts.push({
+                      step: "user-profile-request-error",
+                      pass,
+                      variant: variant.label,
+                      error: String(error),
+                    });
+                  }
+                }
+
+                if (pass < 3) {
+                  await wait(700 * pass);
+                }
+              }
+
+              return {
+                success: false,
+                unauthorized: true,
+                error: "RollerCoin profile API rejected the session.",
+                tokenCount: uniqueTokens.length,
+                attempts,
+              };
+            })();
+            `,
+            true,
+          ),
+          45000,
+          "Profile executeJavaScript timeout (45s).",
+        );
+
+        const profileResult = parseWorkerResult(rawProfile);
+        profileAttempts = Array.isArray(profileResult.attempts) ? profileResult.attempts : [];
+        if (!profileResult.success || !profileResult.json) {
+          return {
+            success: false,
+            unauthorized: Boolean(profileResult.unauthorized),
+            error: profileResult.error || "RollerCoin profile API rejected the session.",
+            endpoint: buildRollercoinRoomConfigEndpoint(""),
+            roomConfigId: "",
+            requestedProfileId: "",
+            cookieCount: sessionInfo.cookieCount,
+            hasSessionCookie: sessionInfo.hasSessionCookie,
+            selectedAuthVariant: profileResult.selectedAuthVariant || null,
+            attempts: profileAttempts,
+          };
+        }
+
+        resolvedProfileId = extractRollercoinProfileId(profileResult.json);
+      } catch (error) {
+        return {
+          success: false,
+          error: `Profile lookup failed: ${error.message}`,
+          endpoint: buildRollercoinRoomConfigEndpoint(""),
+          roomConfigId: "",
+          requestedProfileId: "",
+          cookieCount: sessionInfo.cookieCount,
+          hasSessionCookie: sessionInfo.hasSessionCookie,
+          attempts: profileAttempts,
+        };
+      } finally {
+        await closeWindowGracefully(profileWorker);
+      }
+    }
+  }
+
+  const requestTargetId = explicitRoomConfigId || resolvedProfileId;
+  const endpoint = buildRollercoinRoomConfigEndpoint(requestTargetId);
 
   if (cookieHeader) {
     try {
@@ -4609,11 +4996,13 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
         return {
           success: true,
           endpoint,
-          roomConfigId: roomSnapshot.roomConfigId || roomConfigId,
+          roomConfigId: roomSnapshot.roomConfigId || explicitRoomConfigId || "",
+          requestedProfileId: resolvedProfileId,
           sourcePath: "direct-room-config-api",
           selectedAuthVariant: "cookie-only",
           cookieCount: sessionInfo.cookieCount,
           hasSessionCookie: sessionInfo.hasSessionCookie,
+          attempts: profileAttempts,
           ...roomSnapshot,
         };
       }
@@ -4835,11 +5224,12 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
         unauthorized: Boolean(result.unauthorized),
         error: result.error || "RollerCoin room-config API rejected the session.",
         endpoint,
-        roomConfigId,
+        roomConfigId: explicitRoomConfigId || "",
+        requestedProfileId: resolvedProfileId,
         cookieCount: sessionInfo.cookieCount,
         hasSessionCookie: sessionInfo.hasSessionCookie,
         selectedAuthVariant: result.selectedAuthVariant || null,
-        attempts: Array.isArray(result.attempts) ? result.attempts : [],
+        attempts: [...profileAttempts, ...(Array.isArray(result.attempts) ? result.attempts : [])],
       };
     }
 
@@ -4847,13 +5237,14 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
     return {
       success: true,
       endpoint,
-      roomConfigId: roomSnapshot.roomConfigId || roomConfigId,
+      roomConfigId: roomSnapshot.roomConfigId || explicitRoomConfigId || "",
+      requestedProfileId: resolvedProfileId,
       sourcePath: "browser-session-room-config-api",
       selectedAuthVariant: result.selectedAuthVariant || null,
       tokenCount: Number.isFinite(Number(result.tokenCount)) ? Number(result.tokenCount) : 0,
       cookieCount: sessionInfo.cookieCount,
       hasSessionCookie: sessionInfo.hasSessionCookie,
-      attempts: Array.isArray(result.attempts) ? result.attempts : [],
+      attempts: [...profileAttempts, ...(Array.isArray(result.attempts) ? result.attempts : [])],
       ...roomSnapshot,
     };
   } catch (error) {
@@ -4861,10 +5252,11 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
       success: false,
       error: `Room config fetch failed: ${error.message}`,
       endpoint,
-      roomConfigId,
+      roomConfigId: explicitRoomConfigId || "",
+      requestedProfileId: resolvedProfileId,
       cookieCount: sessionInfo.cookieCount,
       hasSessionCookie: sessionInfo.hasSessionCookie,
-      attempts: [],
+      attempts: profileAttempts,
     };
   } finally {
     await closeWindowGracefully(worker);
@@ -4876,7 +5268,9 @@ if (hasSingleInstanceLock) {
     Menu.setApplicationMenu(null);
     attachRollercoinAssetRequestHeaders(session.defaultSession);
     attachRollercoinAssetRequestHeaders(session.fromPartition(ROLLERCOIN_PARTITION));
+    setupAutoUpdater();
     createWindow();
+    scheduleAutoUpdateCheck();
 
     app.on("second-instance", () => {
       if (mainWindow && !mainWindow.isDestroyed()) {

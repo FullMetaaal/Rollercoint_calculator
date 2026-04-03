@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "dist:win": "electron-builder --win nsis"
+    "dist:win": "electron-builder --win nsis",
+    "release:win": "electron-builder --win nsis --publish always"
   },
   "keywords": [],
   "author": "",
@@ -29,10 +30,21 @@
       "styles.css",
       "package.json"
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "FullMetaaal",
+        "repo": "Rollercoint_calculator",
+        "releaseType": "release"
+      }
+    ],
     "win": {
       "target": [
         "nsis"
       ]
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }
