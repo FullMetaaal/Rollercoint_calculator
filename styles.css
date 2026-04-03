@@ -410,6 +410,29 @@ button.ghost:hover {
   font-weight: 500;
 }
 
+.history-panel {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(180, 196, 215, 0.72);
+}
+
+.history-header {
+  margin-bottom: 8px;
+}
+
+.history-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.history-table-shell {
+  max-height: 280px;
+}
+
+.history-table-shell table {
+  min-width: 620px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -1004,6 +1027,10 @@ tbody tr:hover {
   .market-actions button {
     width: 100%;
     min-width: 0;
+  }
+
+  .history-header {
+    align-items: flex-start;
   }
 
   .market-sort-row label {

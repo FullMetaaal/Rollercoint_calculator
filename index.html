@@ -66,6 +66,37 @@
           <button id="refreshCurrentPowerBtn" type="button" class="ghost">Sync from RollerCoin</button>
         </div>
         <p id="currentSystemSyncStatus" class="muted">RollerCoin power sync is idle.</p>
+        <section class="history-panel" aria-labelledby="powerHistoryTitle">
+          <div class="header-row history-header">
+            <div>
+              <h3 id="powerHistoryTitle">Power History</h3>
+              <p class="section-subtitle">Saved by date when you sync from RollerCoin or change current system values.</p>
+            </div>
+            <button id="clearPowerHistoryBtn" type="button" class="ghost">Clear history</button>
+          </div>
+          <div class="table-shell table-shell-compact history-table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Base power</th>
+                  <th>Bonus</th>
+                  <th>Total power</th>
+                  <th>Growth</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody id="powerHistoryBody">
+                <tr>
+                  <td colspan="6" class="muted">Power history will appear here after the first saved snapshot.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-pagination">
+            <button id="togglePowerHistoryBtn" type="button" class="ghost" hidden>Show older entries</button>
+          </div>
+        </section>
       </section>
 
       <section class="app-tabs">
@@ -120,7 +151,6 @@
             <div class="header-row">
               <h2>Market Scanner (RollerCoin)</h2>
               <div class="header-actions">
-                <button id="checkAppUpdatesBtn" type="button" class="ghost">Check for app updates</button>
                 <button id="rollercoinLoginBtn" type="button" class="ghost">Login to RollerCoin</button>
               </div>
             </div>

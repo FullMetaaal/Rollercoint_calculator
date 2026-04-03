@@ -76,8 +76,11 @@ const POWER_MULTIPLIER = {
 const UNIT_ORDER = ["Gh/s", "Th/s", "Ph/s", "Eh/s", "Zh/s"];
 
 const CURRENT_SYSTEM_STORAGE_KEY = "rollercoin.currentSystem.v1";
+const CURRENT_SYSTEM_HISTORY_STORAGE_KEY = "rollercoin.currentSystem.history.v1";
 const ACTIVE_TAB_STORAGE_KEY = "rollercoin.activeTab.v1";
 const MARKET_VIEW_TAB_STORAGE_KEY = "rollercoin.marketViewTab.v1";
+const CURRENT_SYSTEM_HISTORY_LIMIT = 180;
+const CURRENT_SYSTEM_HISTORY_VISIBLE_COUNT = 5;
 const CURRENT_SYSTEM_FIELD_IDS = [
   "currentBasePowerValue",
   "currentBasePowerUnit",
@@ -88,13 +91,6 @@ const CURRENT_SYSTEM_FIELD_ID_SET = new Set(CURRENT_SYSTEM_FIELD_IDS);
 const ROLLERCOIN_MARKET_STORAGE_KEY = "rollercoin.marketSettings.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY = "rollercoin.marketMinersCache.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_VERSION = 2;
-const TRANSIENT_STORAGE_KEYS = [
-  CURRENT_SYSTEM_STORAGE_KEY,
-  ACTIVE_TAB_STORAGE_KEY,
-  MARKET_VIEW_TAB_STORAGE_KEY,
-  ROLLERCOIN_MARKET_STORAGE_KEY,
-  ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY,
-];
 const MARKET_FIELD_IDS = [
   "displayPowerUnit",
   "marketRoomWidthMode",
@@ -130,6 +126,9 @@ const candidateCountStat = document.getElementById("candidateCountStat");
 const refreshCurrentPowerBtn = document.getElementById("refreshCurrentPowerBtn");
 const currentSystemSyncStatus = document.getElementById("currentSystemSyncStatus");
 const displayPowerUnitInput = document.getElementById("displayPowerUnit");
+const powerHistoryBody = document.getElementById("powerHistoryBody");
+const clearPowerHistoryBtn = document.getElementById("clearPowerHistoryBtn");
+const togglePowerHistoryBtn = document.getElementById("togglePowerHistoryBtn");
 const authTokenIndicator = document.getElementById("authTokenIndicator");
 const authTokenMessage = document.getElementById("authTokenMessage");
 const authActionBtn = document.getElementById("authActionBtn");
@@ -187,6 +186,8 @@ let lastRenderedMarketRecommendations = [];
 let lastRenderedMarketRecommendationsOptions = {};
 let marketHoverTooltip = null;
 let marketHoverTooltipContent = new Map();
+let currentSystemHistory = [];
+let isPowerHistoryExpanded = false;
 
 const MARKET_LOG_MAX_LINES = 250;
 const TABLE_RENDER_BATCH_SIZE = 25;
@@ -316,12 +317,240 @@ function readNonNegativeNumber(inputId, required = true) {
   return value;
 }
 
-function saveCurrentSystem() {
-  // Persistence is intentionally disabled. Current system values live only for this app run.
+function readStoredJson(storageKey) {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredJson(storageKey, value) {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(value));
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+function roundForStorage(value, fractionDigits = 6) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return NaN;
+  return Number(numericValue.toFixed(fractionDigits));
+}
+
+function getCurrentSystemHistorySignature(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return "";
+  const basePhs = roundForStorage(snapshot.basePhs, 6);
+  const bonusPercent = roundForStorage(snapshot.bonusPercent, 4);
+  return `${basePhs}|${bonusPercent}`;
+}
+
+function getCurrentSystemHistorySourceLabel(source) {
+  if (source === "rollercoin-sync") return "RollerCoin sync";
+  if (source === "restore") return "Restored";
+  return "Manual edit";
+}
+
+function createCurrentSystemHistoryEntry(snapshot, source = "manual") {
+  const totalThs = getCurrentTotal(snapshot.baseThs, snapshot.bonusPercent);
+  return {
+    recordedAt: Date.now(),
+    basePhs: roundForStorage(snapshot.basePhs, 6),
+    bonusPercent: roundForStorage(snapshot.bonusPercent, 4),
+    totalPhs: roundForStorage(totalThs / POWER_MULTIPLIER["Ph/s"], 6),
+    source,
+    signature: getCurrentSystemHistorySignature(snapshot),
+  };
+}
+
+function saveCurrentSystem(options = {}) {
+  const snapshot = getCurrentSystemSnapshot(false);
+  if (!snapshot) return;
+
+  const payload = {
+    baseValue: roundForStorage(snapshot.baseValue, 6),
+    baseUnit: snapshot.baseUnit,
+    bonusPercent: roundForStorage(snapshot.bonusPercent, 4),
+    displayUnit: getDisplayPowerUnit(),
+    savedAt: Date.now(),
+  };
+  writeStoredJson(CURRENT_SYSTEM_STORAGE_KEY, payload);
+
+  if (!options.recordHistory) return;
+
+  const historyEntry = createCurrentSystemHistoryEntry(snapshot, options.source || "manual");
+  const latestEntry = currentSystemHistory[0];
+  if (latestEntry && latestEntry.signature === historyEntry.signature) {
+    return;
+  }
+
+  const shouldReplaceLatestManualEntry =
+    latestEntry &&
+    latestEntry.source === "manual" &&
+    historyEntry.source === "manual" &&
+    Math.abs(historyEntry.recordedAt - latestEntry.recordedAt) <= 30000;
+
+  currentSystemHistory = shouldReplaceLatestManualEntry
+    ? [historyEntry, ...currentSystemHistory.slice(1)]
+    : [historyEntry, ...currentSystemHistory];
+  currentSystemHistory = currentSystemHistory.slice(0, CURRENT_SYSTEM_HISTORY_LIMIT);
+  writeStoredJson(CURRENT_SYSTEM_HISTORY_STORAGE_KEY, currentSystemHistory);
+  renderCurrentSystemHistory();
 }
 
 function restoreCurrentSystem() {
-  // Persistence is intentionally disabled. Inputs always start from markup defaults.
+  const saved = readStoredJson(CURRENT_SYSTEM_STORAGE_KEY);
+  if (!saved || typeof saved !== "object") return;
+
+  const baseValue = parseNumber(saved.baseValue);
+  const baseUnit = normalizePowerUnit(saved.baseUnit);
+  const bonusPercent = parseNumber(saved.bonusPercent);
+  const displayUnit = normalizePowerUnit(saved.displayUnit);
+
+  if (Number.isFinite(baseValue) && baseValue >= 0) {
+    document.getElementById("currentBasePowerValue").value = String(baseValue);
+  }
+  if (baseUnit) {
+    document.getElementById("currentBasePowerUnit").value = baseUnit;
+  }
+  if (Number.isFinite(bonusPercent) && bonusPercent >= 0) {
+    document.getElementById("currentBonusPercent").value = String(bonusPercent);
+  }
+  if (displayUnit && displayPowerUnitInput) {
+    displayPowerUnitInput.value = displayUnit;
+  }
+}
+
+function restoreCurrentSystemHistory() {
+  const savedHistory = readStoredJson(CURRENT_SYSTEM_HISTORY_STORAGE_KEY);
+  if (!Array.isArray(savedHistory)) {
+    currentSystemHistory = [];
+    return;
+  }
+
+  currentSystemHistory = savedHistory
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => ({
+      recordedAt: Number(entry.recordedAt) > 0 ? Number(entry.recordedAt) : Date.now(),
+      basePhs: roundForStorage(parseNumber(entry.basePhs), 6),
+      bonusPercent: roundForStorage(parseNumber(entry.bonusPercent), 4),
+      totalPhs: roundForStorage(parseNumber(entry.totalPhs), 6),
+      source: typeof entry.source === "string" ? entry.source : "manual",
+      signature:
+        typeof entry.signature === "string" && entry.signature
+          ? entry.signature
+          : `${roundForStorage(parseNumber(entry.basePhs), 6)}|${roundForStorage(parseNumber(entry.bonusPercent), 4)}`,
+    }))
+    .filter((entry) =>
+      Number.isFinite(entry.recordedAt) &&
+      Number.isFinite(entry.basePhs) &&
+      Number.isFinite(entry.bonusPercent) &&
+      Number.isFinite(entry.totalPhs),
+    )
+    .sort((leftEntry, rightEntry) => rightEntry.recordedAt - leftEntry.recordedAt)
+    .slice(0, CURRENT_SYSTEM_HISTORY_LIMIT);
+}
+
+function formatHistoryDateTime(timestamp) {
+  const parsed = Number(timestamp);
+  if (!Number.isFinite(parsed) || parsed <= 0) return "-";
+  return new Date(parsed).toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatHistoryGrowthPercent(currentEntry, previousEntry) {
+  const currentTotal = parseNumber(currentEntry?.totalPhs);
+  const previousTotal = parseNumber(previousEntry?.totalPhs);
+  if (!Number.isFinite(currentTotal) || !Number.isFinite(previousTotal) || previousTotal <= 0) {
+    return "-";
+  }
+
+  const growthPercent = ((currentTotal - previousTotal) / previousTotal) * 100;
+  const sign = growthPercent > 0 ? "+" : "";
+  return `${sign}${formatMarketValue(growthPercent, 2)}%`;
+}
+
+function renderCurrentSystemHistory() {
+  if (!powerHistoryBody) return;
+
+  if (!Array.isArray(currentSystemHistory) || currentSystemHistory.length === 0) {
+    powerHistoryBody.innerHTML = `
+      <tr>
+        <td colspan="6" class="muted">Power history will appear here after the first saved snapshot.</td>
+      </tr>
+    `;
+    if (clearPowerHistoryBtn) {
+      clearPowerHistoryBtn.disabled = true;
+    }
+    if (togglePowerHistoryBtn) {
+      togglePowerHistoryBtn.hidden = true;
+      togglePowerHistoryBtn.disabled = true;
+      togglePowerHistoryBtn.textContent = "Show older entries";
+    }
+    return;
+  }
+
+  const hasHiddenEntries = currentSystemHistory.length > CURRENT_SYSTEM_HISTORY_VISIBLE_COUNT;
+  const visibleEntries = isPowerHistoryExpanded
+    ? currentSystemHistory
+    : currentSystemHistory.slice(0, CURRENT_SYSTEM_HISTORY_VISIBLE_COUNT);
+
+  powerHistoryBody.innerHTML = visibleEntries
+    .map((entry) => {
+      const fullIndex = currentSystemHistory.indexOf(entry);
+      const previousEntry = currentSystemHistory[fullIndex + 1] || null;
+      const growthText = formatHistoryGrowthPercent(entry, previousEntry);
+      const growthClass =
+        growthText.startsWith("+") ? "positive" : growthText.startsWith("-") && growthText !== "-" ? "negative" : "muted";
+      return `
+      <tr>
+        <td>${escapeHtml(formatHistoryDateTime(entry.recordedAt))}</td>
+        <td>${escapeHtml(formatPowerFromPhs(entry.basePhs))}</td>
+        <td>${escapeHtml(`${formatMarketValue(entry.bonusPercent, 2)}%`)}</td>
+        <td>${escapeHtml(formatPowerFromPhs(entry.totalPhs))}</td>
+        <td><span class="${growthClass}">${escapeHtml(growthText)}</span></td>
+        <td>${escapeHtml(getCurrentSystemHistorySourceLabel(entry.source))}</td>
+      </tr>
+    `;
+    })
+    .join("");
+
+  if (clearPowerHistoryBtn) {
+    clearPowerHistoryBtn.disabled = false;
+  }
+  if (togglePowerHistoryBtn) {
+    if (!hasHiddenEntries) {
+      togglePowerHistoryBtn.hidden = true;
+      togglePowerHistoryBtn.disabled = true;
+      togglePowerHistoryBtn.textContent = "Show older entries";
+    } else {
+      const hiddenCount = currentSystemHistory.length - CURRENT_SYSTEM_HISTORY_VISIBLE_COUNT;
+      togglePowerHistoryBtn.hidden = false;
+      togglePowerHistoryBtn.disabled = false;
+      togglePowerHistoryBtn.textContent = isPowerHistoryExpanded
+        ? "Show only latest 5"
+        : `Show ${hiddenCount} older entries`;
+    }
+  }
+}
+
+function clearCurrentSystemHistory() {
+  currentSystemHistory = [];
+  isPowerHistoryExpanded = false;
+  try {
+    localStorage.removeItem(CURRENT_SYSTEM_HISTORY_STORAGE_KEY);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+  renderCurrentSystemHistory();
 }
 
 function setCurrentSystemSyncStatus(message, tone = "neutral") {
@@ -608,7 +837,7 @@ function applyCurrentSystemFromRollercoin(powerSnapshot) {
   document.getElementById("currentBasePowerValue").value = String(basePhs);
   document.getElementById("currentBasePowerUnit").value = "Ph/s";
   document.getElementById("currentBonusPercent").value = String(bonusPercent);
-  saveCurrentSystem();
+  saveCurrentSystem({ recordHistory: true, source: "rollercoin-sync" });
   recalculateLive();
 }
 
@@ -928,12 +1157,6 @@ function initializeTabs() {
 }
 
 function clearTransientLocalState() {
-  try {
-    TRANSIENT_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
-  } catch {
-    // Ignore localStorage cleanup failures.
-  }
-
   marketMinersCache = [];
   marketSourceInfo = null;
   roomMinersCache = [];
@@ -4290,6 +4513,7 @@ function recalculateLive() {
 
 function refreshPowerUnitViews() {
   updatePowerUnitLabels();
+  renderCurrentSystemHistory();
   recalculateLive();
   renderRoomMinersCollection(roomMinersCache, { resetPagination: false });
 
@@ -4312,6 +4536,34 @@ async function initializeRollercoinSessionState() {
   setMarketStatus("Login to RollerCoin to load fresh data.", "neutral");
   setCurrentSystemSyncStatus("RollerCoin power sync is available after login.", "neutral");
   setRoomMinersStatus("Room miners are not loaded. Login to RollerCoin first.", "neutral");
+
+  if (!ipcRenderer || typeof ipcRenderer.invoke !== "function") {
+    return;
+  }
+
+  try {
+    const sessionInfo = await ipcRenderer.invoke("rollercoin-auth-session");
+    const cookieHeader =
+      sessionInfo && typeof sessionInfo.cookieHeader === "string"
+        ? sessionInfo.cookieHeader.trim()
+        : "";
+
+    if (!cookieHeader) {
+      return;
+    }
+
+    if (rollercoinCookieInput) {
+      rollercoinCookieInput.value = cookieHeader;
+    }
+
+    setAuthIndicatorState("checking", "Saved RollerCoin session found. Verifying...");
+    await checkRollercoinAuthStatus({ silent: true });
+    if (authStatusState === "valid") {
+      setMarketStatus("Saved RollerCoin session restored.", "success");
+    }
+  } catch (error) {
+    setAuthIndicatorState("invalid", `Saved session check failed: ${error.message}`);
+  }
 }
 
 addCandidateBtn.addEventListener("click", () => {
@@ -4353,6 +4605,7 @@ if (marketSortModeInput) {
 }
 if (displayPowerUnitInput) {
   displayPowerUnitInput.addEventListener("change", () => {
+    saveCurrentSystem({ recordHistory: false });
     refreshPowerUnitViews();
   });
 }
@@ -4419,6 +4672,15 @@ if (showMoreMarketResultsBtn) {
 if (authActionBtn) {
   authActionBtn.addEventListener("click", handleAuthAction);
 }
+if (clearPowerHistoryBtn) {
+  clearPowerHistoryBtn.addEventListener("click", clearCurrentSystemHistory);
+}
+if (togglePowerHistoryBtn) {
+  togglePowerHistoryBtn.addEventListener("click", () => {
+    isPowerHistoryExpanded = !isPowerHistoryExpanded;
+    renderCurrentSystemHistory();
+  });
+}
 
 candidatesBody.addEventListener("input", recalculateLive);
 candidatesBody.addEventListener("change", recalculateLive);
@@ -4427,7 +4689,7 @@ document.addEventListener("input", (event) => {
   if (!(event.target instanceof HTMLElement)) return;
 
   if (CURRENT_SYSTEM_FIELD_ID_SET.has(event.target.id)) {
-    saveCurrentSystem();
+    saveCurrentSystem({ recordHistory: false });
   }
   if (MARKET_FIELD_ID_SET.has(event.target.id)) {
     saveMarketSettings();
@@ -4445,7 +4707,7 @@ document.addEventListener("change", (event) => {
   if (!(event.target instanceof HTMLElement)) return;
 
   if (CURRENT_SYSTEM_FIELD_ID_SET.has(event.target.id)) {
-    saveCurrentSystem();
+    saveCurrentSystem({ recordHistory: true, source: "manual" });
   }
   if (MARKET_FIELD_ID_SET.has(event.target.id)) {
     saveMarketSettings();
@@ -4460,10 +4722,13 @@ document.addEventListener("change", (event) => {
 });
 
 clearTransientLocalState();
+restoreCurrentSystem();
+restoreCurrentSystemHistory();
 initializeTabs();
 updatePowerUnitLabels();
 bindMarketProgressListener();
 addCandidate();
 updateCurrentStats();
+renderCurrentSystemHistory();
 renderRoomMinersCollection([]);
-initializeRollercoinSessionState();
+void initializeRollercoinSessionState();

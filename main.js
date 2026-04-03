@@ -10,8 +10,7 @@ let autoUpdaterConfigured = false;
 let autoUpdaterLoadFailed = false;
 let autoUpdateCheckInFlight = null;
 const DEV_PROFILE_SUFFIX = "v2";
-const ROLLERCOIN_PARTITION = "rollercoin-auth";
-const LEGACY_ROLLERCOIN_PARTITION = "persist:rollercoin-auth";
+const ROLLERCOIN_PARTITION = "persist:rollercoin-auth";
 const ENABLE_INTERACTIVE_MARKET_SCANNER = true;
 const MARKET_PAGE_LIMIT = 100;
 const MARKET_MAX_PAGES = 250;
@@ -121,34 +120,6 @@ function attachRollercoinAssetRequestHeaders(targetSession) {
       callback({ requestHeaders });
     },
   );
-}
-
-async function clearSessionData(targetSession, label) {
-  if (!targetSession) return;
-
-  try {
-    await targetSession.clearStorageData();
-  } catch (error) {
-    writeStartupLog("Failed to clear session storage data.", {
-      label,
-      message: error?.message || String(error),
-    });
-  }
-
-  try {
-    await targetSession.clearCache();
-  } catch (error) {
-    writeStartupLog("Failed to clear session cache.", {
-      label,
-      message: error?.message || String(error),
-    });
-  }
-}
-
-async function resetEphemeralBrowserState() {
-  await clearSessionData(session.defaultSession, "default");
-  await clearSessionData(session.fromPartition(ROLLERCOIN_PARTITION), "auth");
-  await clearSessionData(session.fromPartition(LEGACY_ROLLERCOIN_PARTITION), "legacy-auth");
 }
 
 configureStoragePaths();
@@ -517,6 +488,11 @@ async function readRollercoinCookies(session) {
       /sid|session|token|auth|connect/i.test(cookie.name),
     ),
   };
+}
+
+async function readRollercoinAuthSessionInfo() {
+  const authSession = session.fromPartition(ROLLERCOIN_PARTITION);
+  return readRollercoinCookies(authSession);
 }
 
 function openRollercoinAuthWindow() {
@@ -5621,7 +5597,6 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
 if (hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     writeStartupLog("App ready.");
-    await resetEphemeralBrowserState();
     Menu.setApplicationMenu(buildApplicationMenu());
     attachRollercoinAssetRequestHeaders(session.defaultSession);
     attachRollercoinAssetRequestHeaders(session.fromPartition(ROLLERCOIN_PARTITION));
@@ -5646,6 +5621,9 @@ if (hasSingleInstanceLock) {
           ? payload.cookieHeader || ""
           : "";
       return probeRollercoinAuthStatus(cookieHeader);
+    });
+    ipcMain.handle("rollercoin-auth-session", async () => {
+      return readRollercoinAuthSessionInfo();
     });
     ipcMain.handle("rollercoin-current-power", async (_event, payload) => {
       const cookieHeader =
