@@ -22,10 +22,8 @@ const CURRENT_SYSTEM_FIELD_ID_SET = new Set(CURRENT_SYSTEM_FIELD_IDS);
 const ROLLERCOIN_MARKET_STORAGE_KEY = "rollercoin.marketSettings.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY = "rollercoin.marketMinersCache.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_VERSION = 2;
-const UI_ACTIVE_TAB_STORAGE_KEY = "rollercoin.activeTab.v1";
 const MARKET_FIELD_IDS = [
   "displayPowerUnit",
-  "marketRoomConfigRef",
   "marketRoomWidthMode",
   "marketRecommendationMode",
   "marketReplacementStrategy",
@@ -62,12 +60,8 @@ const displayPowerUnitInput = document.getElementById("displayPowerUnit");
 const authTokenIndicator = document.getElementById("authTokenIndicator");
 const authTokenMessage = document.getElementById("authTokenMessage");
 const authActionBtn = document.getElementById("authActionBtn");
-const tabButtons = Array.from(document.querySelectorAll(".tab-button[data-tab-target]"));
-const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
-
 const rollercoinLoginBtn = document.getElementById("rollercoinLoginBtn");
 const rollercoinCookieInput = document.getElementById("rollercoinCookie");
-const marketRoomConfigRefInput = document.getElementById("marketRoomConfigRef");
 const marketRoomWidthModeInput = document.getElementById("marketRoomWidthMode");
 const marketRecommendationModeInput = document.getElementById("marketRecommendationMode");
 const marketReplacementStrategyInput = document.getElementById("marketReplacementStrategy");
@@ -380,7 +374,7 @@ function filterRoomMiners(miners) {
 function compareMinerNames(leftMiner, rightMiner) {
   const leftName = String(leftMiner?.name || "").trim();
   const rightName = String(rightMiner?.name || "").trim();
-  const byName = leftName.localeCompare(rightName, "ru", { sensitivity: "base" });
+  const byName = leftName.localeCompare(rightName, "en", { sensitivity: "base" });
   if (byName !== 0) return byName;
 
   const leftLevel = Number.isFinite(Number(leftMiner?.level)) ? Number(leftMiner.level) : 0;
@@ -442,7 +436,7 @@ function renderRoomMinersCollection(miners = [], options = {}) {
     lastRenderedRoomMiners = [];
     roomMinersBody.innerHTML = `
       <tr>
-        <td colspan="5" class="muted">Room miners will appear here after loading room config.</td>
+        <td colspan="5" class="muted">Room miners will appear here after loading the current room.</td>
       </tr>
     `;
     updateVisibleRowsControls({
@@ -576,7 +570,6 @@ function saveMarketSettings() {
   try {
     const payload = {
       displayPowerUnit: displayPowerUnitInput?.value ?? "Ph/s",
-      marketRoomConfigRef: marketRoomConfigRefInput?.value ?? "",
       marketRoomWidthMode: marketRoomWidthModeInput?.value ?? "any",
       marketRecommendationMode: marketRecommendationModeInput?.value ?? "single",
       marketReplacementStrategy: marketReplacementStrategyInput?.value ?? "off",
@@ -612,9 +605,6 @@ function restoreMarketSettings() {
       if (displayUnit) {
         displayPowerUnitInput.value = displayUnit;
       }
-    }
-    if (typeof parsed.marketRoomConfigRef === "string" && marketRoomConfigRefInput) {
-      marketRoomConfigRefInput.value = parsed.marketRoomConfigRef;
     }
     if (
       typeof parsed.marketRoomWidthMode === "string" &&
@@ -676,7 +666,7 @@ function restoreMarketSettings() {
 function formatMarketDateTime(timestamp) {
   const parsed = Number(timestamp);
   if (!Number.isFinite(parsed) || parsed <= 0) return "unknown";
-  return new Date(parsed).toLocaleString("ru-RU", { hour12: false });
+  return new Date(parsed).toLocaleString("en-US", { hour12: false });
 }
 
 function normalizeMarketSourceInfo(rawSourceInfo, fallbackScore = 0) {
@@ -983,53 +973,86 @@ function getMarketReplacementStrategy() {
   return getMarketReplacementMode() === "flex" ? "flex" : "strict";
 }
 
-function saveActiveTab(tabId) {
+function saveActiveTab(storageKey, tabId) {
+  if (!storageKey || !tabId) return;
   try {
-    localStorage.setItem(UI_ACTIVE_TAB_STORAGE_KEY, tabId);
+    localStorage.setItem(storageKey, tabId);
   } catch {
     // Ignore localStorage write issues.
   }
 }
 
-function setActiveTab(targetPanelId) {
-  if (!targetPanelId) return;
+function setActiveTab(groupName, targetPanelId, storageKey = "") {
+  if (!groupName || !targetPanelId) return;
 
-  tabButtons.forEach((button) => {
+  const buttons = Array.from(
+    document.querySelectorAll(`.tab-button[data-tab-group="${groupName}"][data-tab-target]`),
+  );
+  const panels = Array.from(document.querySelectorAll(`.tab-panel[data-tab-group="${groupName}"]`));
+  if (buttons.length === 0 || panels.length === 0) return;
+
+  buttons.forEach((button) => {
     const isActive = button.dataset.tabTarget === targetPanelId;
     button.classList.toggle("is-active", isActive);
     button.setAttribute("aria-selected", isActive ? "true" : "false");
     button.tabIndex = isActive ? 0 : -1;
   });
 
-  tabPanels.forEach((panel) => {
+  panels.forEach((panel) => {
     const isActive = panel.id === targetPanelId;
     panel.hidden = !isActive;
     panel.classList.toggle("is-active", isActive);
   });
 
-  saveActiveTab(targetPanelId);
+  saveActiveTab(storageKey, targetPanelId);
 }
 
 function initializeTabs() {
-  if (tabButtons.length === 0 || tabPanels.length === 0) return;
+  const buttons = Array.from(document.querySelectorAll(".tab-button[data-tab-group][data-tab-target]"));
+  if (buttons.length === 0) return;
 
-  tabButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      setActiveTab(button.dataset.tabTarget || "marketTabPanel");
-    });
+  const groups = new Map();
+  buttons.forEach((button) => {
+    const groupName = button.dataset.tabGroup || "";
+    if (!groupName) return;
+    const storageKey = button.dataset.tabStorageKey || "";
+    if (!groups.has(groupName)) {
+      groups.set(groupName, { buttons: [], storageKey });
+    }
+    const group = groups.get(groupName);
+    group.buttons.push(button);
+    if (!group.storageKey && storageKey) {
+      group.storageKey = storageKey;
+    }
   });
 
-  let initialTabId = "marketTabPanel";
-  try {
-    const savedTabId = localStorage.getItem(UI_ACTIVE_TAB_STORAGE_KEY);
-    if (savedTabId && tabPanels.some((panel) => panel.id === savedTabId)) {
-      initialTabId = savedTabId;
-    }
-  } catch {
-    // Ignore malformed storage data.
-  }
+  groups.forEach((group, groupName) => {
+    const panels = Array.from(document.querySelectorAll(`.tab-panel[data-tab-group="${groupName}"]`));
+    if (panels.length === 0) return;
 
-  setActiveTab(initialTabId);
+    group.buttons.forEach((button) => {
+      button.addEventListener("click", () => {
+        setActiveTab(groupName, button.dataset.tabTarget || panels[0].id, group.storageKey || "");
+      });
+    });
+
+    let initialTabId =
+      group.buttons.find((button) => button.classList.contains("is-active"))?.dataset.tabTarget ||
+      panels[0].id;
+
+    if (group.storageKey) {
+      try {
+        const savedTabId = localStorage.getItem(group.storageKey);
+        if (savedTabId && panels.some((panel) => panel.id === savedTabId)) {
+          initialTabId = savedTabId;
+        }
+      } catch {
+        // Ignore malformed storage data.
+      }
+    }
+
+    setActiveTab(groupName, initialTabId, group.storageKey || "");
+  });
 }
 
 function buildReplacementSetLabel(miners) {
@@ -1098,11 +1121,10 @@ async function loadRoomMinersFromRollercoin(options = {}) {
       throw new Error("IPC is unavailable.");
     }
 
-    const roomConfigRef = marketRoomConfigRefInput?.value?.trim?.() ?? "";
     const cookieHeader = rollercoinCookieInput?.value?.trim?.() ?? "";
     const roomResult = await ipcRenderer.invoke("rollercoin-room-config-fetch", {
       cookieHeader,
-      roomConfigRef,
+      roomConfigRef: "",
     });
 
     if (!roomResult?.success || !Array.isArray(roomResult.miners)) {
@@ -1126,7 +1148,7 @@ async function loadRoomMinersFromRollercoin(options = {}) {
     };
     renderRoomMinersCollection(roomMinersCache);
 
-    const roomIdText = roomResult.roomConfigId ? ` (room ${roomResult.roomConfigId})` : "";
+    const roomIdText = roomResult.roomConfigId ? ` (room ${roomResult.roomConfigId})` : " (current room)";
     setRoomMinersStatus(
       `Loaded ${normalizedRoomMiners.length} room miners${roomIdText}. Market table excludes same name + level.`,
       "success",
@@ -1157,7 +1179,7 @@ async function loadRoomMinersFromRollercoin(options = {}) {
 
 function formatLogTime(timestamp) {
   const date = Number.isFinite(timestamp) ? new Date(timestamp) : new Date();
-  return date.toLocaleTimeString("ru-RU", { hour12: false });
+  return date.toLocaleTimeString("en-US", { hour12: false });
 }
 
 function appendMarketLog(message, level = "info", timestamp = Date.now()) {
@@ -2616,7 +2638,7 @@ async function fetchMarketMiners(cookieHeader, requestId = null) {
 
 function formatMarketValue(value, fractionDigits = 2) {
   if (!Number.isFinite(value)) return "-";
-  return value.toLocaleString("ru-RU", { maximumFractionDigits: fractionDigits });
+  return value.toLocaleString("en-US", { maximumFractionDigits: fractionDigits });
 }
 
 function readOptionalInputNumber(element) {
@@ -3341,7 +3363,7 @@ function formatMarketHoverReplacementMiner(miner) {
   return `
     <li class="market-hover-tooltip-miner">
       <span class="market-hover-tooltip-name">${escapeHtml(miner?.name || "Unknown")}${escapeHtml(levelText)}</span>
-      <span class="market-hover-tooltip-meta">${escapeHtml(powerText)} • ${escapeHtml(bonusText)}</span>
+      <span class="market-hover-tooltip-meta">${escapeHtml(powerText)} - ${escapeHtml(bonusText)}</span>
     </li>
   `;
 }
@@ -3980,7 +4002,7 @@ async function handleLoadMarketMiners() {
   }
   setMarketControlsDisabled(true);
   setMarketStatus(
-    "Loading miners from direct market API with full pagination...",
+    "Loading miners from market API. Direct mode runs first, browser mode is the fallback...",
     "neutral",
   );
   startMarketHeartbeat();
@@ -4296,7 +4318,7 @@ function calculate() {
       <div>${formatPowerFromThs(best.baseNew)}</div>
 
       <div class="muted">New total bonus</div>
-      <div>${best.bonusNew.toLocaleString("ru-RU", { maximumFractionDigits: 4 })}%</div>
+      <div>${best.bonusNew.toLocaleString("en-US", { maximumFractionDigits: 4 })}%</div>
 
       <div class="muted">New total power</div>
       <div>${formatPowerFromThs(best.totalNew)}</div>

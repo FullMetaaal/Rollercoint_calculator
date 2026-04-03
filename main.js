@@ -9,6 +9,15 @@ const ENABLE_INTERACTIVE_MARKET_SCANNER = true;
 const MARKET_PAGE_LIMIT = 100;
 const MARKET_MAX_PAGES = 250;
 const MARKET_PAGE_BATCH_SIZE = 2;
+const MARKET_DIRECT_PAGE_BATCH_SIZE = 4;
+const MARKET_REQUEST_TIMEOUT_MS = 12000;
+const MARKET_PROBE_TIMEOUT_MS = 6000;
+const MARKET_PAGE_RETRY_LIMIT = 3;
+const MARKET_HTTPS_AGENT = new https.Agent({
+  keepAlive: true,
+  maxSockets: Math.max(MARKET_DIRECT_PAGE_BATCH_SIZE * 2, 8),
+  maxFreeSockets: Math.max(MARKET_DIRECT_PAGE_BATCH_SIZE, 4),
+});
 
 function ensureDirSafe(dirPath) {
   try {
@@ -501,8 +510,28 @@ function extractRollercoinRoomMinersPayload(payload) {
     throw new Error("RollerCoin room-config API returned no miners.");
   }
 
+  const detectedRoomConfigId = [
+    root.id,
+    root._id,
+    root.room_id,
+    root.roomId,
+    root.config_id,
+    root.configId,
+    getByPath(root, "room.id"),
+    getByPath(root, "room._id"),
+    getByPath(root, "room.room_id"),
+    getByPath(root, "room.roomId"),
+    getByPath(root, "config.id"),
+    getByPath(root, "config._id"),
+    getByPath(root, "config.room_id"),
+    getByPath(root, "config.roomId"),
+  ]
+    .map((value) => (value === null || value === undefined ? "" : String(value).trim()))
+    .find(Boolean) || "";
+
   return {
     miners,
+    roomConfigId: detectedRoomConfigId,
   };
 }
 
@@ -726,12 +755,22 @@ function getMarketplaceQueryProfiles(defaultLimit = MARKET_PAGE_LIMIT) {
   ];
 }
 
-function requestJsonWithCookieHeader(url, cookieHeader) {
+function requestJsonWithCookieHeader(url, cookieHeader, options = {}) {
+  const timeoutMs =
+    Number.isFinite(Number(options?.timeoutMs)) && Number(options.timeoutMs) > 0
+      ? Math.floor(Number(options.timeoutMs))
+      : MARKET_REQUEST_TIMEOUT_MS;
+  const extraHeaders =
+    options && typeof options.headers === "object" && !Array.isArray(options.headers)
+      ? options.headers
+      : {};
+
   return new Promise((resolve, reject) => {
     const req = https.request(
       url,
       {
         method: "GET",
+        agent: MARKET_HTTPS_AGENT,
         headers: {
           Accept: "application/json, text/plain, */*",
           Cookie: cookieHeader,
@@ -740,6 +779,7 @@ function requestJsonWithCookieHeader(url, cookieHeader) {
           Pragma: "no-cache",
           Referer: "https://rollercoin.com/marketplace/buy?itemType=miner",
           "User-Agent": "Mozilla/5.0 RollerCoinCalculator",
+          ...extraHeaders,
         },
       },
       (res) => {
@@ -765,7 +805,7 @@ function requestJsonWithCookieHeader(url, cookieHeader) {
       },
     );
 
-    req.setTimeout(20000, () => {
+    req.setTimeout(timeoutMs, () => {
       req.destroy(new Error("Request timeout"));
     });
     req.on("error", reject);
@@ -839,81 +879,412 @@ async function fetchMarketMinersViaDirectApi(preferredCookieHeader = "", progres
     };
   }
 
-  const marketplaceOffers = [];
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const hasValidNormalizedOffer = (row) =>
+    Number.isFinite(row?.price) &&
+    row.price > 0 &&
+    Number.isFinite(row?.power) &&
+    row.power > 0;
+  const queryProfiles = getMarketplaceQueryProfiles();
+  let selectedProfile = null;
+  let sawUnauthorizedStatus = false;
+  let sawAnyProbeOk = false;
+  let sawAnyProbeJson = false;
+  let sawAnyProbeRows = false;
 
-  for (let page = 1; page <= MARKET_MAX_PAGES; page += 1) {
-    const url = buildMarketplaceSaleOrdersUrl(page);
+  for (const profile of queryProfiles) {
+    const url = buildMarketplaceSaleOrdersUrl(1, profile);
     if (progress) {
-      progress(`Direct API request for page ${page}...`);
+      progress(`Direct API probe (${profile.label})...`);
     }
 
     let response;
     try {
-      response = await requestJsonWithCookieHeader(url, cookieHeader);
+      response = await requestJsonWithCookieHeader(url, cookieHeader, {
+        timeoutMs: MARKET_PROBE_TIMEOUT_MS,
+      });
     } catch (error) {
-      attempts.push({ step: "page-request-error", page, url, error: String(error) });
-      return {
-        success: false,
-        error: `Direct market API request failed on page ${page}: ${error.message || String(error)}`,
-        attempts,
-      };
+      attempts.push({
+        step: "direct-probe-error",
+        profile: profile.label,
+        url,
+        error: String(error),
+      });
+      continue;
     }
 
-    attempts.push({ step: "page-response", page, url, status: response.statusCode });
+    const rows = response.json && typeof response.json === "object" ? extractRows(response.json) : [];
+    attempts.push({
+      step: "direct-probe-response",
+      profile: profile.label,
+      url,
+      status: response.statusCode,
+      rows: rows.length,
+    });
+
     if (response.statusCode === 401 || response.statusCode === 403) {
-      return {
-        success: false,
-        unauthorized: true,
-        hardUnauthorized: true,
-        error: "RollerCoin rejected the market API request. Session is not authorized.",
-        attempts,
-      };
+      sawUnauthorizedStatus = true;
+    }
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      sawAnyProbeOk = true;
+    }
+    if (response.json && typeof response.json === "object") {
+      sawAnyProbeJson = true;
+    }
+    if (rows.length > 0) {
+      sawAnyProbeRows = true;
     }
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      return {
-        success: false,
-        error: `Market API returned status ${response.statusCode} on page ${page}.`,
-        attempts,
-      };
+      continue;
     }
-
-    if (!response.json || typeof response.json !== "object") {
-      return {
-        success: false,
-        error: `Market API returned non-JSON payload on page ${page}.`,
-        attempts,
-      };
-    }
-
-    const rows = extractRows(response.json);
-    attempts.push({ step: "page-rows", page, rows: rows.length });
-    if (rows.length === 0) {
-      break;
+    if (!response.json || typeof response.json !== "object" || rows.length === 0) {
+      continue;
     }
 
     const minerRows = rows.filter((row) => isMinerLike(row));
     const candidateRows = minerRows.length > 0 ? minerRows : rows;
-    const normalizedRows = candidateRows
-      .map((row) => normalizeFirstOffer(row))
-      .filter((row) => Number.isFinite(row.price) && row.price > 0 && Number.isFinite(row.power) && row.power > 0);
+    const hasValidPreview = candidateRows
+      .slice(0, 5)
+      .some((row) => hasValidNormalizedOffer(normalizeFirstOffer(row)));
 
-    normalizedRows.forEach((row) => {
-      marketplaceOffers.push({
-        ...row,
-        source: "marketplace-buy-direct-api",
-      });
-    });
+    if (!hasValidPreview) {
+      continue;
+    }
+
+    selectedProfile = profile;
+    break;
+  }
+
+  if (!selectedProfile) {
+    return {
+      success: false,
+      unauthorized: sawUnauthorizedStatus,
+      hardUnauthorized: sawUnauthorizedStatus,
+      error: sawUnauthorizedStatus
+        ? "RollerCoin rejected the direct market API request. Session is not authorized."
+        : "Direct market API probe returned no parseable miner offers.",
+      diagnostics: {
+        sawUnauthorizedStatus,
+        sawAnyProbeOk,
+        sawAnyProbeJson,
+        sawAnyProbeRows,
+      },
+      attempts,
+    };
+  }
+
+  if (progress) {
+    progress(`Direct API selected query profile: ${selectedProfile.label}.`);
+  }
+
+  const marketplaceOffers = [];
+  const seenOfferKeys = new Set();
+  const seenPageFirstKeys = new Set();
+  const pageFailureCounts = new Map();
+  let nextPage = 1;
+  let pageBatchSize = MARKET_DIRECT_PAGE_BATCH_SIZE;
+  let recoveryPagesRemaining = 0;
+  let shouldStopPaging = false;
+  let stagnantPageCount = 0;
+  let partialSuccessWarning = "";
+
+  const fetchPageWithRetries = async (page, url) => {
+    for (let attempt = 1; attempt <= MARKET_PAGE_RETRY_LIMIT; attempt += 1) {
+      const requestUrl = `${url}${url.includes("?") ? "&" : "?"}_=${page}-${attempt}-${Date.now()}`;
+
+      try {
+        const response = await requestJsonWithCookieHeader(requestUrl, cookieHeader, {
+          timeoutMs: MARKET_REQUEST_TIMEOUT_MS + (attempt - 1) * 1500,
+        });
+        const shouldRetry =
+          attempt < MARKET_PAGE_RETRY_LIMIT &&
+          (
+            response.statusCode === 429 ||
+            response.statusCode >= 500 ||
+            (response.statusCode >= 200 &&
+              response.statusCode < 300 &&
+              (!response.json || typeof response.json !== "object"))
+          );
+
+        attempts.push({
+          step: shouldRetry ? "direct-page-retry-scheduled" : "direct-page-fetch-finished",
+          page,
+          attempt,
+          url: requestUrl,
+          status: response.statusCode,
+        });
+
+        if (shouldRetry) {
+          await delay(350 * attempt + (page % 3) * 120);
+          continue;
+        }
+
+        return { page, url: requestUrl, response };
+      } catch (error) {
+        attempts.push({
+          step: "direct-page-request-attempt-error",
+          page,
+          attempt,
+          url: requestUrl,
+          error: String(error),
+        });
+
+        if (attempt < MARKET_PAGE_RETRY_LIMIT) {
+          await delay(350 * attempt + (page % 3) * 120);
+          continue;
+        }
+
+        return { page, url: requestUrl, error: String(error) };
+      }
+    }
+
+    return { page, url, error: "Page retry limit exhausted." };
+  };
+
+  while (nextPage <= MARKET_MAX_PAGES && !shouldStopPaging) {
+    const batchStartPage = nextPage;
+    const batchPages = [];
+    for (
+      let page = batchStartPage;
+      page < batchStartPage + pageBatchSize && page <= MARKET_MAX_PAGES;
+      page += 1
+    ) {
+      batchPages.push({ page, url: buildMarketplaceSaleOrdersUrl(page, selectedProfile) });
+    }
+
+    if (batchPages.length === 0) {
+      break;
+    }
 
     if (progress) {
+      const firstPage = batchPages[0].page;
+      const lastPage = batchPages[batchPages.length - 1].page;
       progress(
-        `Direct API page ${page}: rows=${rows.length}, normalized=${normalizedRows.length}, total=${marketplaceOffers.length}.`,
+        firstPage === lastPage
+          ? `Direct API request for page ${firstPage}...`
+          : `Direct API request for pages ${firstPage}-${lastPage}...`,
       );
     }
 
-    if (rows.length < MARKET_PAGE_LIMIT || candidateRows.length < MARKET_PAGE_LIMIT) {
-      break;
+    const batchResults = await Promise.all(
+      batchPages.map(({ page, url }) => fetchPageWithRetries(page, url)),
+    );
+    batchResults.sort((left, right) => left.page - right.page);
+
+    const failedPages = [];
+
+    for (const result of batchResults) {
+      const { page, url, response, error } = result;
+      if (error) {
+        const failureCount = (pageFailureCounts.get(page) || 0) + 1;
+        pageFailureCounts.set(page, failureCount);
+        failedPages.push(page);
+        attempts.push({
+          step: "direct-page-request-error",
+          page,
+          url,
+          error,
+          failureCount,
+          keptOffers: marketplaceOffers.length,
+        });
+        continue;
+      }
+
+      attempts.push({ step: "direct-page-response", page, url, status: response.statusCode });
+      if (response.statusCode === 401 || response.statusCode === 403) {
+        if (marketplaceOffers.length === 0) {
+          return {
+            success: false,
+            unauthorized: true,
+            hardUnauthorized: true,
+            error: "RollerCoin rejected the market API request. Session is not authorized.",
+            attempts,
+          };
+        }
+
+        const failureCount = (pageFailureCounts.get(page) || 0) + 1;
+        pageFailureCounts.set(page, failureCount);
+        failedPages.push(page);
+        attempts.push({
+          step: "direct-page-response-deferred",
+          page,
+          status: response.statusCode,
+          failureCount,
+          keptOffers: marketplaceOffers.length,
+        });
+        continue;
+      }
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        const failureCount = (pageFailureCounts.get(page) || 0) + 1;
+        pageFailureCounts.set(page, failureCount);
+        failedPages.push(page);
+        attempts.push({
+          step: "direct-page-non-ok-deferred",
+          page,
+          status: response.statusCode,
+          failureCount,
+          keptOffers: marketplaceOffers.length,
+        });
+        continue;
+      }
+
+      if (!response.json || typeof response.json !== "object") {
+        const failureCount = (pageFailureCounts.get(page) || 0) + 1;
+        pageFailureCounts.set(page, failureCount);
+        failedPages.push(page);
+        attempts.push({
+          step: "direct-page-non-json-deferred",
+          page,
+          status: response.statusCode,
+          failureCount,
+          keptOffers: marketplaceOffers.length,
+        });
+        continue;
+      }
+
+      const rows = extractRows(response.json);
+      attempts.push({ step: "direct-page-rows", page, rows: rows.length });
+      if (rows.length === 0) {
+        shouldStopPaging = true;
+        break;
+      }
+
+      const minerRows = rows.filter((row) => isMinerLike(row));
+      const candidateRows = minerRows.length > 0 ? minerRows : rows;
+      const normalizedRows = candidateRows
+        .map((row) => normalizeFirstOffer(row))
+        .filter((row) => hasValidNormalizedOffer(row));
+      const firstRow = normalizedRows[0] || null;
+      const pageFirstKey = firstRow
+        ? `${firstRow.id}:${firstRow.price}:${firstRow.power}:${firstRow.bonus_percent || 0}`
+        : `page-${page}-empty`;
+
+      if (seenPageFirstKeys.has(pageFirstKey)) {
+        stagnantPageCount += 1;
+        attempts.push({
+          step: "direct-page-repeat",
+          page,
+          stagnantPageCount,
+          totalOffers: marketplaceOffers.length,
+        });
+
+        if (stagnantPageCount >= 3) {
+          shouldStopPaging = true;
+          partialSuccessWarning =
+            partialSuccessWarning ||
+            "Direct market API stopped after several repeated pages; using the miners loaded successfully.";
+          attempts.push({
+            step: "direct-page-repeat-stop",
+            page,
+            stagnantPageCount,
+            totalOffers: marketplaceOffers.length,
+          });
+          break;
+        }
+
+        continue;
+      }
+
+      seenPageFirstKeys.add(pageFirstKey);
+
+      let addedRows = 0;
+      normalizedRows.forEach((row) => {
+        const dedupeKey = `${row.id}:${row.price}:${row.power}:${row.bonus_percent || 0}`;
+        if (seenOfferKeys.has(dedupeKey)) return;
+        seenOfferKeys.add(dedupeKey);
+        marketplaceOffers.push({
+          ...row,
+          source: "marketplace-buy-direct-api",
+        });
+        addedRows += 1;
+      });
+
+      pageFailureCounts.delete(page);
+      attempts.push({
+        step: "direct-page-added",
+        page,
+        normalized: normalizedRows.length,
+        added: addedRows,
+        totalOffers: marketplaceOffers.length,
+      });
+
+      if (progress) {
+        progress(
+          `Direct API page ${page}: rows=${rows.length}, normalized=${normalizedRows.length}, added=${addedRows}, total=${marketplaceOffers.length}.`,
+        );
+      }
+
+      stagnantPageCount = addedRows === 0 ? stagnantPageCount + 1 : 0;
+      if (stagnantPageCount >= 3) {
+        shouldStopPaging = true;
+        partialSuccessWarning =
+          partialSuccessWarning ||
+          "Direct market API stopped after several pages without new miners; using the miners loaded successfully.";
+        attempts.push({
+          step: "direct-page-stagnant-stop",
+          page,
+          stagnantPageCount,
+          totalOffers: marketplaceOffers.length,
+        });
+        break;
+      }
+
+      if (rows.length < selectedProfile.limit || candidateRows.length < selectedProfile.limit) {
+        shouldStopPaging = true;
+        break;
+      }
     }
+
+    if (!shouldStopPaging && failedPages.length > 0) {
+      const uniqueFailedPages = [...new Set(failedPages)].sort((left, right) => left - right);
+      const highestFailureCount = Math.max(
+        ...uniqueFailedPages.map((page) => pageFailureCounts.get(page) || 0),
+      );
+
+      attempts.push({
+        step: "direct-page-requeue",
+        pages: uniqueFailedPages,
+        highestFailureCount,
+        nextBatchSize: 1,
+        recoveryPagesRemaining: Math.max(2, 2 + highestFailureCount),
+      });
+
+      if (highestFailureCount >= MARKET_PAGE_RETRY_LIMIT + 1) {
+        shouldStopPaging = true;
+        partialSuccessWarning =
+          partialSuccessWarning ||
+          "Direct market API stopped after several page failures; using the miners loaded before the block.";
+        attempts.push({
+          step: "direct-page-requeue-stop",
+          pages: uniqueFailedPages,
+          keptOffers: marketplaceOffers.length,
+        });
+        break;
+      }
+
+      pageBatchSize = 1;
+      recoveryPagesRemaining = Math.max(recoveryPagesRemaining, 2 + highestFailureCount);
+      nextPage = uniqueFailedPages[0];
+      await delay(400 + highestFailureCount * 150);
+      continue;
+    }
+
+    if (pageBatchSize === 1) {
+      recoveryPagesRemaining = Math.max(0, recoveryPagesRemaining - 1);
+      if (recoveryPagesRemaining === 0) {
+        pageBatchSize = MARKET_DIRECT_PAGE_BATCH_SIZE;
+        attempts.push({
+          step: "direct-page-batch-restored",
+          restoredBatchSize: pageBatchSize,
+          nextPage: batchStartPage + batchPages.length,
+          totalOffers: marketplaceOffers.length,
+        });
+      }
+    }
+
+    nextPage = batchStartPage + batchPages.length;
   }
 
   if (marketplaceOffers.length === 0) {
@@ -928,8 +1299,11 @@ async function fetchMarketMinersViaDirectApi(preferredCookieHeader = "", progres
     success: true,
     endpoint: "https://rollercoin.com/api/marketplace/buy/sale-orders",
     mode: "direct-market-api",
-    sourcePath: "paged-sale-orders-api",
+    sourcePath: partialSuccessWarning ? "paged-sale-orders-api-partial" : "paged-sale-orders-api",
     sourceScore: marketplaceOffers.length,
+    selectedQueryProfile: selectedProfile.label,
+    partial: Boolean(partialSuccessWarning),
+    warning: partialSuccessWarning,
     marketplaceOffers,
     attempts,
   };
@@ -3533,7 +3907,7 @@ async function captureMarketViaDebugger(endpoints, progress = null) {
 
 async function fetchMarketViaSession(options = {}, progress = null) {
   if (progress) {
-    progress("Market fetch started in browser-session API mode.");
+    progress("Market fetch started. Trying direct market API first.");
   }
 
   const cookieHeader =
@@ -3542,16 +3916,16 @@ async function fetchMarketViaSession(options = {}, progress = null) {
       : "";
 
   try {
-    const result = await fetchMarketMinersViaBrowserSession(cookieHeader, progress);
+    const result = await fetchMarketMinersViaDirectApi(cookieHeader, progress);
     if (progress) {
       if (result.success) {
         progress(
-          `Browser-session market API finished successfully with ${result.marketplaceOffers?.length || 0} offers.`,
+          `Direct market API finished successfully with ${result.marketplaceOffers?.length || 0} offers.`,
           "success",
         );
       } else {
         progress(
-          `Browser-session market API failed: ${result.error || "unknown error"}.`,
+          `Direct market API failed: ${result.error || "unknown error"}.`,
           result.unauthorized ? "warn" : "error",
         );
       }
@@ -3561,19 +3935,19 @@ async function fetchMarketViaSession(options = {}, progress = null) {
     }
 
     if (progress) {
-      progress("Trying Node direct API as a fallback...", "warn");
+      progress("Trying browser-session API as a fallback...", "warn");
     }
 
-    const fallbackResult = await fetchMarketMinersViaDirectApi(cookieHeader, progress);
+    const fallbackResult = await fetchMarketMinersViaBrowserSession(cookieHeader, progress);
     if (progress) {
       if (fallbackResult.success) {
         progress(
-          `Node direct API fallback finished successfully with ${fallbackResult.marketplaceOffers?.length || 0} offers.`,
+          `Browser-session market API fallback finished successfully with ${fallbackResult.marketplaceOffers?.length || 0} offers.`,
           "success",
         );
       } else {
         progress(
-          `Node direct API fallback failed: ${fallbackResult.error || "unknown error"}.`,
+          `Browser-session market API fallback failed: ${fallbackResult.error || "unknown error"}.`,
           fallbackResult.unauthorized ? "warn" : "error",
         );
       }
@@ -3586,18 +3960,18 @@ async function fetchMarketViaSession(options = {}, progress = null) {
           ...(Array.isArray(result.attempts) ? result.attempts : []),
           ...(Array.isArray(fallbackResult.attempts) ? fallbackResult.attempts : []),
         ],
-        error: `${result.error} | Node fallback: ${fallbackResult.error || "unknown error"}`,
+        error: `${result.error} | Browser fallback: ${fallbackResult.error || "unknown error"}`,
       };
     }
 
     return fallbackResult;
   } catch (error) {
     if (progress) {
-      progress(`Browser-session market API crashed: ${error.message}`, "error");
+      progress(`Market fetch crashed: ${error.message}`, "error");
     }
     return {
       success: false,
-      error: `Browser-session market API failed: ${error.message}`,
+      error: `Market fetch failed: ${error.message}`,
     };
   }
 }
@@ -4235,7 +4609,7 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
         return {
           success: true,
           endpoint,
-          roomConfigId,
+          roomConfigId: roomSnapshot.roomConfigId || roomConfigId,
           sourcePath: "direct-room-config-api",
           selectedAuthVariant: "cookie-only",
           cookieCount: sessionInfo.cookieCount,
@@ -4473,7 +4847,7 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
     return {
       success: true,
       endpoint,
-      roomConfigId,
+      roomConfigId: roomSnapshot.roomConfigId || roomConfigId,
       sourcePath: "browser-session-room-config-api",
       selectedAuthVariant: result.selectedAuthVariant || null,
       tokenCount: Number.isFinite(Number(result.tokenCount)) ? Number(result.tokenCount) : 0,
