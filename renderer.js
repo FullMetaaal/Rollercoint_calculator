@@ -1,5 +1,69 @@
 const https = require("https");
 const { ipcRenderer } = require("electron");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const STARTUP_LOG_PATH = path.join(os.tmpdir(), "roller-coin-calculator-startup.log");
+
+function writeRendererLog(message, extra = null) {
+  const suffix = extra ? ` ${JSON.stringify(extra)}` : "";
+  try {
+    fs.appendFileSync(
+      STARTUP_LOG_PATH,
+      `[${new Date().toISOString()}] [renderer] ${message}${suffix}\n`,
+      "utf8",
+    );
+  } catch {
+    // Ignore logging failures.
+  }
+}
+
+window.addEventListener("error", (event) => {
+  writeRendererLog("window error", {
+    message: event?.message || null,
+    filename: event?.filename || null,
+    lineno: event?.lineno || null,
+    colno: event?.colno || null,
+    error: event?.error?.stack || event?.error?.message || null,
+  });
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event?.reason;
+  writeRendererLog("unhandledrejection", {
+    reason:
+      reason instanceof Error
+        ? reason.stack || reason.message
+        : typeof reason === "string"
+          ? reason
+          : JSON.stringify(reason),
+  });
+});
+
+window.addEventListener("beforeunload", () => {
+  writeRendererLog("beforeunload fired");
+});
+
+document.addEventListener("visibilitychange", () => {
+  writeRendererLog("visibilitychange", {
+    visibilityState: document.visibilityState,
+    hidden: document.hidden,
+  });
+});
+
+process.on("uncaughtException", (error) => {
+  writeRendererLog("process uncaughtException", {
+    message: error?.message || String(error),
+    stack: error?.stack || null,
+  });
+});
+
+process.on("exit", (code) => {
+  writeRendererLog("process exit", { code });
+});
+
+writeRendererLog("renderer.js loaded");
 
 const POWER_MULTIPLIER = {
   "Gh/s": 0.001,

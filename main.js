@@ -432,6 +432,14 @@ function createWindow() {
     writeStartupLog("Main window closed.");
   });
 
+  mainWindow.on("close", () => {
+    writeStartupLog("Main window close requested.", {
+      destroyed: mainWindow?.isDestroyed?.() || false,
+      visible: mainWindow?.isVisible?.() || false,
+      minimized: mainWindow?.isMinimized?.() || false,
+    });
+  });
+
   mainWindow.webContents.on("did-finish-load", () => {
     writeStartupLog("Main window finished loading.");
   });
@@ -450,6 +458,10 @@ function createWindow() {
 
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     writeStartupLog("Renderer process gone.", details);
+  });
+
+  mainWindow.webContents.on("destroyed", () => {
+    writeStartupLog("Main window webContents destroyed.");
   });
 
   mainWindow.loadFile(path.join(__dirname, "index.html")).catch((error) => {
