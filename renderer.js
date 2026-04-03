@@ -174,6 +174,7 @@ let marketHeartbeatTimer = null;
 let marketHeartbeatStartedAt = 0;
 let marketProgressListenerBound = false;
 let marketLogLines = [];
+let marketLogText = "";
 let authStatusState = "checking";
 let authStatusCheckInFlight = false;
 let appUpdateCheckInFlight = false;
@@ -1301,14 +1302,18 @@ function appendMarketLog(message, level = "info", timestamp = Date.now()) {
 
   if (marketLogLines.length > MARKET_LOG_MAX_LINES) {
     marketLogLines = marketLogLines.slice(-MARKET_LOG_MAX_LINES);
+    marketLogText = marketLogLines.join("\n");
+  } else {
+    marketLogText = marketLogText ? `${marketLogText}\n${line}` : line;
   }
 
-  marketLogsOutput.textContent = marketLogLines.join("\n");
+  marketLogsOutput.textContent = marketLogText;
   marketLogsOutput.scrollTop = marketLogsOutput.scrollHeight;
 }
 
 function clearMarketLogs() {
   marketLogLines = [];
+  marketLogText = "";
   if (marketLogsOutput) {
     marketLogsOutput.textContent = "";
   }
@@ -2927,11 +2932,19 @@ function buildFilteredMarketMiners({
   roomMinersCacheSnapshot,
   ownedRoomMinerKeys,
 }) {
-  return marketMinersCache
-    .filter((miner) => (budget === null ? true : miner.price <= budget))
-    .filter((miner) => (maxMinerPrice === null ? true : miner.price <= maxMinerPrice))
-    .filter((miner) => (roomWidthMode === "any" ? true : String(miner.width || "") === roomWidthMode))
-    .filter((miner) => (roomMinersCacheSnapshot.length === 0 ? true : !ownedRoomMinerKeys.has(getRoomMinerOwnershipKey(miner))));
+  const hasBudgetFilter = budget !== null;
+  const hasMaxPriceFilter = maxMinerPrice !== null;
+  const hasWidthFilter = roomWidthMode !== "any";
+  const hideOwnedRoomMiners = roomMinersCacheSnapshot.length > 0 && ownedRoomMinerKeys.size > 0;
+
+  return marketMinersCache.filter((miner) => {
+    const price = Number(miner?.price);
+    if (hasBudgetFilter && (!Number.isFinite(price) || price > budget)) return false;
+    if (hasMaxPriceFilter && (!Number.isFinite(price) || price > maxMinerPrice)) return false;
+    if (hasWidthFilter && String(miner?.width || "") !== roomWidthMode) return false;
+    if (hideOwnedRoomMiners && ownedRoomMinerKeys.has(getRoomMinerOwnershipKey(miner))) return false;
+    return true;
+  });
 }
 
 function buildSingleRecommendationItems({

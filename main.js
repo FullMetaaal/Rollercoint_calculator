@@ -1078,6 +1078,33 @@ function extractRows(payload) {
   return [];
 }
 
+function extractRowsTotalCount(payload) {
+  const root = payload && typeof payload === "object" ? (payload.data ?? payload) : null;
+  if (!root || typeof root !== "object") return null;
+
+  const directCandidates = [
+    root.total,
+    root.count,
+    root.total_count,
+    root.totalCount,
+    getByPath(root, "meta.total"),
+    getByPath(root, "meta.count"),
+    getByPath(root, "pagination.total"),
+    getByPath(root, "pagination.count"),
+    getByPath(root, "pager.total"),
+    getByPath(root, "pager.count"),
+  ];
+
+  for (const candidate of directCandidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+
+  return null;
+}
+
 function normalizeFirstOffer(row) {
   const id =
     row.id ||
@@ -1207,6 +1234,173 @@ function getMarketplaceQueryProfiles(defaultLimit = MARKET_PAGE_LIMIT) {
     { label: "filtered-limit100", limit: defaultLimit, includeFilters: true },
     { label: "basic-limit12", limit: 12, includeFilters: false },
   ];
+}
+
+function normalizeAuthTokenValues(rawValue) {
+  if (!rawValue) return [];
+
+  const collected = [];
+  const pushIfValid = (candidate) => {
+    if (typeof candidate !== "string") return;
+    const trimmed = candidate.trim().replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
+    if (!trimmed) return;
+    if (/^Bearer\s+/i.test(trimmed)) {
+      collected.push(trimmed);
+      collected.push(trimmed.replace(/^Bearer\s+/i, ""));
+      return;
+    }
+    collected.push(trimmed);
+  };
+
+  pushIfValid(rawValue);
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    const queue = [parsed];
+    const seen = new WeakSet();
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) continue;
+      if (typeof current === "string") {
+        pushIfValid(current);
+        continue;
+      }
+      if (Array.isArray(current)) {
+        current.forEach((entry) => {
+          if (typeof entry === "string") {
+            pushIfValid(entry);
+          } else if (entry && typeof entry === "object" && !seen.has(entry)) {
+            seen.add(entry);
+            queue.push(entry);
+          }
+        });
+        continue;
+      }
+      if (typeof current === "object") {
+        Object.entries(current).forEach(([key, entry]) => {
+          if (/token|auth|jwt|access/i.test(String(key))) {
+            if (typeof entry === "string") {
+              pushIfValid(entry);
+            } else if (entry && typeof entry === "object" && !seen.has(entry)) {
+              seen.add(entry);
+              queue.push(entry);
+            }
+          }
+        });
+      }
+    }
+  } catch {
+    // Ignore non-JSON token payloads.
+  }
+
+  return [...new Set(collected)];
+}
+
+function buildAuthHeaderVariants(tokenValues = []) {
+  const variants = [{ label: "cookie-only", headers: {} }];
+
+  tokenValues.forEach((token) => {
+    const clean = String(token || "").replace(/^Bearer\s+/i, "").trim();
+    if (!clean) return;
+    variants.push({ label: "authorization-bearer", headers: { Authorization: "Bearer " + clean } });
+    variants.push({ label: "authorization-raw", headers: { Authorization: String(token) } });
+    variants.push({ label: "x-access-token", headers: { "x-access-token": clean } });
+    variants.push({ label: "x-auth-token", headers: { "x-auth-token": clean } });
+    variants.push({ label: "token", headers: { token: clean } });
+  });
+
+  const uniqueVariants = [];
+  const seen = new Set();
+  variants.forEach((variant) => {
+    const key = JSON.stringify(variant.headers || {});
+    if (seen.has(key)) return;
+    seen.add(key);
+    uniqueVariants.push(variant);
+  });
+
+  return uniqueVariants.slice(0, 6);
+}
+
+async function readRollercoinAuthTokenValuesFromSession(authSession) {
+  const worker = new BrowserWindow({
+    show: false,
+    width: 1180,
+    height: 860,
+    autoHideMenuBar: true,
+    title: "RollerCoin Token Reader",
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      partition: ROLLERCOIN_PARTITION,
+    },
+  });
+
+  try {
+    await runWithTimeout(
+      worker.loadURL("https://rollercoin.com/marketplace/buy?itemType=miner"),
+      10000,
+      "Token reader bootstrap timeout (10s).",
+    );
+
+    const raw = await runWithTimeout(
+      worker.webContents.executeJavaScript(
+        `
+        (() => {
+          const tokenCandidates = [];
+          const collect = (storageName, storage) => {
+            try {
+              for (let index = 0; index < storage.length; index += 1) {
+                const key = storage.key(index);
+                const value = storage.getItem(key);
+                if (!value) continue;
+                const lowerKey = String(key).toLowerCase();
+                const looksLikeTokenKey = /token|auth|jwt|access/.test(lowerKey);
+                const looksLikeJwt = /^eyJ[A-Za-z0-9_-]+\\./.test(value);
+                if (looksLikeTokenKey || looksLikeJwt) {
+                  tokenCandidates.push({ key, value, storage: storageName });
+                }
+              }
+            } catch {
+              // Ignore storage read failures.
+            }
+          };
+
+          collect("localStorage", localStorage);
+          collect("sessionStorage", sessionStorage);
+
+          return {
+            href: location.href,
+            tokenCandidates,
+          };
+        })();
+        `,
+        true,
+      ),
+      5000,
+      "Token reader executeJavaScript timeout (5s).",
+    );
+
+    const tokenValues = [];
+    const seenTokens = new Set();
+    const tokenCandidates =
+      raw && typeof raw === "object" && Array.isArray(raw.tokenCandidates) ? raw.tokenCandidates : [];
+
+    tokenCandidates.forEach((item) => {
+      normalizeAuthTokenValues(item?.value).forEach((value) => {
+        if (!value || seenTokens.has(value)) return;
+        seenTokens.add(value);
+        tokenValues.push(value);
+      });
+    });
+
+    return {
+      href: raw?.href || worker.webContents.getURL(),
+      tokenValues,
+    };
+  } finally {
+    await closeWindowGracefully(worker);
+  }
 }
 
 function requestJsonWithCookieHeader(url, cookieHeader, options = {}) {
@@ -1345,7 +1539,6 @@ async function fetchMarketMinersViaDirectApi(preferredCookieHeader = "", progres
   let sawAnyProbeOk = false;
   let sawAnyProbeJson = false;
   let sawAnyProbeRows = false;
-
   for (const profile of queryProfiles) {
     const url = buildMarketplaceSaleOrdersUrl(1, profile);
     if (progress) {
@@ -4407,6 +4600,9 @@ async function fetchMarketViaSession(options = {}, progress = null) {
       }
     }
 
+    if (fallbackResult.success) {
+      return fallbackResult;
+    }
     if (!fallbackResult.success && result.error) {
       return {
         ...fallbackResult,
