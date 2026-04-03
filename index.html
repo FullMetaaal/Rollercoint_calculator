@@ -24,10 +24,6 @@
           <div class="stat-label">Bonus Power</div>
           <div class="stat-value" id="currentBonusPowerStat">-</div>
         </article>
-        <article class="stat-card">
-          <div class="stat-label">Кандидатов</div>
-          <div class="stat-value" id="candidateCountStat">0</div>
-        </article>
       </section>
 
       <section class="card">
@@ -72,258 +68,302 @@
         <p id="currentSystemSyncStatus" class="muted">RollerCoin power sync is idle.</p>
       </section>
 
-      <section class="card">
-        <h2>Майнер на замену (опционально)</h2>
-        <div class="grid-3">
-          <label>
-            Мощность старого майнера
-            <input id="oldMinerPowerValue" type="number" min="0" step="0.001" />
-          </label>
-          <label>
-            Единица
-            <select id="oldMinerPowerUnit">
-              <option>Gh/s</option>
-              <option>Th/s</option>
-              <option selected>Ph/s</option>
-              <option>Eh/s</option>
-              <option>Zh/s</option>
-            </select>
-          </label>
-          <label>
-            Бонус старого майнера (%)
-            <input id="oldMinerBonusPercent" type="number" min="0" step="0.01" />
-          </label>
-        </div>
-      </section>
-
-      <section class="card card-market" id="marketCard">
-        <div class="header-row">
-          <h2>Market Scanner (RollerCoin)</h2>
-          <button id="rollercoinLoginBtn" type="button" class="ghost">Login to RollerCoin</button>
+      <section class="app-tabs">
+        <div class="tab-list" role="tablist" aria-label="Инструменты">
+          <button
+            id="marketTabBtn"
+            type="button"
+            class="tab-button is-active"
+            data-tab-target="marketTabPanel"
+            role="tab"
+            aria-selected="true"
+            aria-controls="marketTabPanel"
+          >
+            Market Scanner
+          </button>
+          <button
+            id="candidatesTabBtn"
+            type="button"
+            class="tab-button"
+            data-tab-target="candidatesTabPanel"
+            role="tab"
+            aria-selected="false"
+            aria-controls="candidatesTabPanel"
+          >
+            Проверка кандидатов
+          </button>
         </div>
 
-        <label>
-          Cookie session (auto-filled after login window)
-          <textarea
-            id="rollercoinCookie"
-            rows="2"
-            placeholder="cookie1=value1; cookie2=value2"
-          ></textarea>
-        </label>
-
-        <div class="grid-3">
-          <label>
-            Room config URL / ID
-            <input
-              id="marketRoomConfigRef"
-              type="text"
-              placeholder="https://rollercoin.com/api/game/room-config/<id> or room id"
-            />
-          </label>
-          <label>
-            Replace by width
-            <select id="marketRoomWidthMode">
-              <option value="any" selected>Any width</option>
-              <option value="1">Small (1)</option>
-              <option value="2">Large (2)</option>
-            </select>
-          </label>
-          <label>
-            Room miners
-            <button id="loadRoomMinersBtn" type="button" class="ghost">Load room miners</button>
-          </label>
-        </div>
-
-        <div class="grid-3">
-          <label>
-            Recommendation mode
-            <select id="marketRecommendationMode">
-              <option value="single" selected>Single purchase</option>
-              <option value="budget">Budget combinations</option>
-            </select>
-          </label>
-          <label>
-            Replacement mode
-            <select id="marketReplacementEnabled">
-              <option value="off" selected>Off</option>
-              <option value="on">On</option>
-            </select>
-          </label>
-          <label>
-            Replacement strategy
-            <select id="marketReplacementStrategy">
-              <option value="strict" selected>Strict same width</option>
-              <option value="flex">Flexible slots</option>
-            </select>
-          </label>
-        </div>
-
-        <label>
-          Replacement notes
-          <input id="marketReplacementHint" type="text" value="Flexible mode allows 2x width 1 for width 2." readonly />
-        </label>
-
-        <div class="grid-3">
-          <label>
-            Budget (RLT)
-            <input id="marketBudget" type="number" min="0" step="0.01" placeholder="e.g. 1000" />
-          </label>
-          <label>
-            Max price per miner (RLT)
-            <input id="marketMaxMinerPrice" type="number" min="0" step="0.01" placeholder="optional" />
-          </label>
-          <label>
-            Top results
-            <input id="marketTopN" type="number" min="1" step="1" placeholder="empty = all" />
-          </label>
-        </div>
-
-        <div class="actions market-actions">
-          <button id="loadMarketMinersBtn" type="button" class="ghost">Load miners from market</button>
-          <button id="findBestMarketBtn" type="button" class="primary">Find best options</button>
-        </div>
-
-        <div class="status-stack">
-          <p id="marketStatus" class="muted status-line">Login is required to access market API.</p>
-          <p id="marketSummary" class="muted status-line"></p>
-          <p id="roomMinersStatus" class="muted status-line">Room miners are not loaded.</p>
-        </div>
-        <div id="roomReplacementSuggestions" class="room-replacement-suggestions muted">
-          Replacement suggestions will appear here after finding market options.
-        </div>
-
-        <details class="data-section" open>
-        <summary>Room miners</summary>
-        <div class="market-sort-row">
-          <label>
-            Search room miners
-            <input id="roomMinersSearch" type="text" placeholder="name, L2, width 2..." />
-          </label>
-          <label>
-            Sort room miners by
-            <select id="roomMinersSortMode">
-              <option value="powerDesc" selected>Power (high to low)</option>
-              <option value="bonusDesc">Bonus (high to low)</option>
-              <option value="widthAsc">Width (small to large)</option>
-              <option value="nameAsc">Name (A-Z)</option>
-            </select>
-          </label>
-          <span id="roomMinersCountInfo" class="muted"></span>
-        </div>
-        <div class="table-shell">
-        <table id="roomMinersTable" class="candidates-result-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Room miner</th>
-              <th id="roomMinersPowerHeader">Power (Ph/s)</th>
-              <th>Bonus (%)</th>
-              <th>Width</th>
-            </tr>
-          </thead>
-          <tbody id="roomMinersBody">
-            <tr>
-              <td colspan="5" class="muted">Room miners will appear here after loading room config.</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-        <div class="table-pagination">
-          <button id="showMoreRoomMinersBtn" type="button" class="ghost" hidden>Show 25 more</button>
-        </div>
-        </details>
-
-        <details class="data-section" open>
-        <summary>Market candidates</summary>
-        <div class="market-sort-row">
-          <label>
-            Sort market results by
-            <select id="marketSortMode">
-              <option value="gainPerPrice" selected>Gain / RLT</option>
-              <option id="marketSortGainPowerOption" value="gainPower">Gain (Ph/s)</option>
-            </select>
-          </label>
-          <span id="marketResultsCountInfo" class="muted"></span>
-        </div>
-        <div class="table-shell table-shell-large">
-        <table id="marketResultsTable" class="candidates-result-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Miner</th>
-              <th>Price</th>
-              <th id="marketResultsPowerHeader">Power (Ph/s)</th>
-              <th>Bonus (%)</th>
-              <th>Width</th>
-              <th id="marketResultsGainHeader">Gain (Ph/s)</th>
-              <th id="marketResultsGainPerPriceHeader">Gain / RLT (Ph/s)</th>
-            </tr>
-          </thead>
-          <tbody id="marketResultsBody">
-            <tr>
-              <td colspan="8" class="muted">Best market candidates will appear here after loading.</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-        <div class="table-pagination">
-          <button id="showMoreMarketResultsBtn" type="button" class="ghost" hidden>Show 25 more</button>
-        </div>
-        </details>
-        <details class="data-section">
-          <summary>Load logs</summary>
-          <div class="market-logs">
+        <section
+          id="marketTabPanel"
+          class="tab-panel is-active"
+          role="tabpanel"
+          aria-labelledby="marketTabBtn"
+        >
+          <section class="card card-market" id="marketCard">
             <div class="header-row">
-              <h3>Load Logs</h3>
-              <button id="clearMarketLogsBtn" type="button" class="ghost">Clear logs</button>
+              <h2>Market Scanner (RollerCoin)</h2>
+              <button id="rollercoinLoginBtn" type="button" class="ghost">Login to RollerCoin</button>
             </div>
-            <pre id="marketLogsOutput" class="market-logs-output muted">Logs will appear here after clicking "Load miners from market".</pre>
-          </div>
-        </details>
-        <div class="auth-banner" id="authBanner">
-          <div class="auth-toggle auth-checking" id="authTokenIndicator" aria-hidden="true">
-            <span class="auth-toggle-knob"></span>
-          </div>
-          <div class="auth-meta">
-            <div class="auth-title">RollerCoin Auth</div>
-            <div class="auth-subtitle" id="authTokenMessage">Checking session...</div>
-          </div>
-          <button id="authActionBtn" type="button" class="ghost">Check auth</button>
-        </div>
-      </section>
 
-      <section class="secondary-layout">
-      <section class="card">
-        <div class="header-row">
-          <h2>Кандидаты</h2>
-          <button id="addCandidateBtn" type="button" class="ghost">Добавить кандидата</button>
-        </div>
+            <label>
+              Cookie session (auto-filled after login window)
+              <textarea
+                id="rollercoinCookie"
+                rows="2"
+                placeholder="cookie1=value1; cookie2=value2"
+              ></textarea>
+            </label>
 
-        <div class="table-shell table-shell-compact">
-        <table id="candidatesTable">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Мощность</th>
-              <th>Единица</th>
-              <th>Бонус (%)</th>
-              <th>Цена ($)</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="candidatesBody"></tbody>
-        </table>
-        </div>
+            <div class="grid-3">
+              <label>
+                Room config URL / ID
+                <input
+                  id="marketRoomConfigRef"
+                  type="text"
+                  placeholder="https://rollercoin.com/api/game/room-config/<id> or room id"
+                />
+              </label>
+              <label>
+                Replace by width
+                <select id="marketRoomWidthMode">
+                  <option value="any" selected>Any width</option>
+                  <option value="1">Small (1)</option>
+                  <option value="2">Large (2)</option>
+                </select>
+              </label>
+              <label>
+                Room miners
+                <button id="loadRoomMinersBtn" type="button" class="ghost">Load room miners</button>
+              </label>
+            </div>
 
-        <div class="actions">
-          <button id="calculateBtn" type="button" class="primary">Рассчитать лучшего</button>
-        </div>
-      </section>
+            <div class="grid-3">
+              <label>
+                Recommendation mode
+                <select id="marketRecommendationMode">
+                  <option value="single" selected>Single purchase</option>
+                  <option value="budget">Budget combinations</option>
+                </select>
+              </label>
+              <label>
+                Replacement behavior
+                <select id="marketReplacementStrategy">
+                  <option value="off" selected>Off</option>
+                  <option value="strict">Strict same width</option>
+                  <option value="flex">Flexible slots</option>
+                </select>
+              </label>
+            </div>
 
-      <section class="card" id="resultCard">
-        <h2>Результат</h2>
-        <div id="resultContent">Добавьте хотя бы одного кандидата.</div>
-      </section>
+            <p class="inline-hint">
+              Flexible slots: one width 2 miner can be replaced by two width 1 miners.
+            </p>
+
+            <div class="grid-3">
+              <label>
+                Budget (RLT)
+                <input id="marketBudget" type="number" min="0" step="0.01" placeholder="e.g. 1000" />
+              </label>
+              <label>
+                Max price per miner (RLT)
+                <input id="marketMaxMinerPrice" type="number" min="0" step="0.01" placeholder="optional" />
+              </label>
+              <label>
+                Top results
+                <input id="marketTopN" type="number" min="1" step="1" placeholder="empty = all" />
+              </label>
+            </div>
+
+            <div class="actions market-actions">
+              <button id="loadMarketMinersBtn" type="button" class="ghost">Load miners from market</button>
+              <button id="findBestMarketBtn" type="button" class="primary">Find best options</button>
+            </div>
+
+            <div class="status-stack">
+              <p id="marketStatus" class="muted status-line">Login is required to access market API.</p>
+              <p id="marketSummary" class="muted status-line"></p>
+              <p id="roomMinersStatus" class="muted status-line">Room miners are not loaded.</p>
+            </div>
+            <div id="roomReplacementSuggestions" class="room-replacement-suggestions muted">
+              Replacement suggestions will appear here after finding market options.
+            </div>
+
+            <details class="data-section" open>
+            <summary>Room miners</summary>
+            <div class="market-sort-row">
+              <label>
+                Search room miners
+                <input id="roomMinersSearch" type="text" placeholder="name, L2, width 2..." />
+              </label>
+              <label>
+                Sort room miners by
+                <select id="roomMinersSortMode">
+                  <option value="powerDesc" selected>Power (high to low)</option>
+                  <option value="bonusDesc">Bonus (high to low)</option>
+                  <option value="widthAsc">Width (small to large)</option>
+                  <option value="nameAsc">Name (A-Z)</option>
+                </select>
+              </label>
+              <span id="roomMinersCountInfo" class="muted"></span>
+            </div>
+            <div class="table-shell">
+            <table id="roomMinersTable" class="candidates-result-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Room miner</th>
+                  <th id="roomMinersPowerHeader">Power (Ph/s)</th>
+                  <th>Bonus (%)</th>
+                  <th>Width</th>
+                </tr>
+              </thead>
+              <tbody id="roomMinersBody">
+                <tr>
+                  <td colspan="5" class="muted">Room miners will appear here after loading room config.</td>
+                </tr>
+              </tbody>
+            </table>
+            </div>
+            <div class="table-pagination">
+              <button id="showMoreRoomMinersBtn" type="button" class="ghost" hidden>Show 25 more</button>
+            </div>
+            </details>
+
+            <details class="data-section" open>
+            <summary>Market candidates</summary>
+            <div class="market-sort-row">
+              <label>
+                Sort market results by
+                <select id="marketSortMode">
+                  <option value="gainPerPrice" selected>Gain / RLT</option>
+                  <option id="marketSortGainPowerOption" value="gainPower">Gain (Ph/s)</option>
+                </select>
+              </label>
+              <span id="marketResultsCountInfo" class="muted"></span>
+            </div>
+            <div class="table-shell table-shell-large">
+            <table id="marketResultsTable" class="candidates-result-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Miner</th>
+                  <th>Price</th>
+                  <th id="marketResultsPowerHeader">Power (Ph/s)</th>
+                  <th>Bonus (%)</th>
+                  <th>Width</th>
+                  <th id="marketResultsGainHeader">Gain (Ph/s)</th>
+                  <th id="marketResultsGainPerPriceHeader">Gain / RLT (Ph/s)</th>
+                </tr>
+              </thead>
+              <tbody id="marketResultsBody">
+                <tr>
+                  <td colspan="8" class="muted">Best market candidates will appear here after loading.</td>
+                </tr>
+              </tbody>
+            </table>
+            </div>
+            <div class="table-pagination">
+              <button id="showMoreMarketResultsBtn" type="button" class="ghost" hidden>Show 25 more</button>
+            </div>
+            </details>
+            <details class="data-section">
+              <summary>Load logs</summary>
+              <div class="market-logs">
+                <div class="header-row">
+                  <h3>Load Logs</h3>
+                  <button id="clearMarketLogsBtn" type="button" class="ghost">Clear logs</button>
+                </div>
+                <pre id="marketLogsOutput" class="market-logs-output muted">Logs will appear here after clicking "Load miners from market".</pre>
+              </div>
+            </details>
+            <div class="auth-banner" id="authBanner">
+              <div class="auth-toggle auth-checking" id="authTokenIndicator" aria-hidden="true">
+                <span class="auth-toggle-knob"></span>
+              </div>
+              <div class="auth-meta">
+                <div class="auth-title">RollerCoin Auth</div>
+                <div class="auth-subtitle" id="authTokenMessage">Checking session...</div>
+              </div>
+              <button id="authActionBtn" type="button" class="ghost">Check auth</button>
+            </div>
+          </section>
+        </section>
+
+        <section
+          id="candidatesTabPanel"
+          class="tab-panel"
+          role="tabpanel"
+          aria-labelledby="candidatesTabBtn"
+          hidden
+        >
+          <section class="card">
+            <h2>Майнер на замену (опционально)</h2>
+            <p class="inline-hint">
+              Эти поля нужны только для ручной проверки, если вы сравниваете замену конкретного майнера.
+            </p>
+            <div class="grid-3">
+              <label>
+                Мощность старого майнера
+                <input id="oldMinerPowerValue" type="number" min="0" step="0.001" />
+              </label>
+              <label>
+                Единица
+                <select id="oldMinerPowerUnit">
+                  <option>Gh/s</option>
+                  <option>Th/s</option>
+                  <option selected>Ph/s</option>
+                  <option>Eh/s</option>
+                  <option>Zh/s</option>
+                </select>
+              </label>
+              <label>
+                Бонус старого майнера (%)
+                <input id="oldMinerBonusPercent" type="number" min="0" step="0.01" />
+              </label>
+            </div>
+          </section>
+
+          <section class="secondary-layout">
+          <section class="card">
+            <div class="header-row">
+              <div>
+                <h2>Кандидаты</h2>
+                <p class="section-subtitle">
+                  Вручную сравните несколько вариантов. Сейчас в списке:
+                  <span id="candidateCountStat">0</span>
+                </p>
+              </div>
+              <button id="addCandidateBtn" type="button" class="ghost">Добавить кандидата</button>
+            </div>
+
+            <div class="table-shell table-shell-compact">
+            <table id="candidatesTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Мощность</th>
+                  <th>Единица</th>
+                  <th>Бонус (%)</th>
+                  <th>Цена ($)</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="candidatesBody"></tbody>
+            </table>
+            </div>
+
+            <div class="actions">
+              <button id="calculateBtn" type="button" class="primary">Рассчитать лучшего</button>
+            </div>
+          </section>
+
+          <section class="card" id="resultCard">
+            <h2>Результат</h2>
+            <div id="resultContent">Добавьте хотя бы одного кандидата.</div>
+          </section>
+          </section>
+        </section>
       </section>
     </main>
 

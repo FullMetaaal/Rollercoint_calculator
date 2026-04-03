@@ -22,12 +22,12 @@ const CURRENT_SYSTEM_FIELD_ID_SET = new Set(CURRENT_SYSTEM_FIELD_IDS);
 const ROLLERCOIN_MARKET_STORAGE_KEY = "rollercoin.marketSettings.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY = "rollercoin.marketMinersCache.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_VERSION = 2;
+const UI_ACTIVE_TAB_STORAGE_KEY = "rollercoin.activeTab.v1";
 const MARKET_FIELD_IDS = [
   "displayPowerUnit",
   "marketRoomConfigRef",
   "marketRoomWidthMode",
   "marketRecommendationMode",
-  "marketReplacementEnabled",
   "marketReplacementStrategy",
   "rollercoinCookie",
   "marketBudget",
@@ -62,13 +62,14 @@ const displayPowerUnitInput = document.getElementById("displayPowerUnit");
 const authTokenIndicator = document.getElementById("authTokenIndicator");
 const authTokenMessage = document.getElementById("authTokenMessage");
 const authActionBtn = document.getElementById("authActionBtn");
+const tabButtons = Array.from(document.querySelectorAll(".tab-button[data-tab-target]"));
+const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
 
 const rollercoinLoginBtn = document.getElementById("rollercoinLoginBtn");
 const rollercoinCookieInput = document.getElementById("rollercoinCookie");
 const marketRoomConfigRefInput = document.getElementById("marketRoomConfigRef");
 const marketRoomWidthModeInput = document.getElementById("marketRoomWidthMode");
 const marketRecommendationModeInput = document.getElementById("marketRecommendationMode");
-const marketReplacementEnabledInput = document.getElementById("marketReplacementEnabled");
 const marketReplacementStrategyInput = document.getElementById("marketReplacementStrategy");
 const marketBudgetInput = document.getElementById("marketBudget");
 const marketMaxMinerPriceInput = document.getElementById("marketMaxMinerPrice");
@@ -126,6 +127,7 @@ const BUDGET_COMBINATION_REPLACEMENT_SET_LIMIT = 8;
 const BUDGET_COMBINATION_OPTION_LIMIT = 320;
 const BUDGET_COMBINATION_STATE_LIMIT = 220;
 const BUDGET_COMBINATION_RESULT_LIMIT = 160;
+const BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH = 5;
 
 function parseNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
@@ -577,8 +579,7 @@ function saveMarketSettings() {
       marketRoomConfigRef: marketRoomConfigRefInput?.value ?? "",
       marketRoomWidthMode: marketRoomWidthModeInput?.value ?? "any",
       marketRecommendationMode: marketRecommendationModeInput?.value ?? "single",
-      marketReplacementEnabled: marketReplacementEnabledInput?.value ?? "off",
-      marketReplacementStrategy: marketReplacementStrategyInput?.value ?? "strict",
+      marketReplacementStrategy: marketReplacementStrategyInput?.value ?? "off",
       rollercoinCookie: rollercoinCookieInput.value,
       marketBudget: marketBudgetInput?.value ?? "",
       marketMaxMinerPrice: marketMaxMinerPriceInput?.value ?? "",
@@ -629,19 +630,17 @@ function restoreMarketSettings() {
     ) {
       marketRecommendationModeInput.value = parsed.marketRecommendationMode;
     }
-    if (
-      typeof parsed.marketReplacementEnabled === "string" &&
-      marketReplacementEnabledInput &&
-      ["off", "on"].includes(parsed.marketReplacementEnabled)
-    ) {
-      marketReplacementEnabledInput.value = parsed.marketReplacementEnabled;
-    }
-    if (
-      typeof parsed.marketReplacementStrategy === "string" &&
-      marketReplacementStrategyInput &&
-      ["strict", "flex"].includes(parsed.marketReplacementStrategy)
-    ) {
-      marketReplacementStrategyInput.value = parsed.marketReplacementStrategy;
+    if (marketReplacementStrategyInput) {
+      if (
+        typeof parsed.marketReplacementStrategy === "string" &&
+        ["off", "strict", "flex"].includes(parsed.marketReplacementStrategy)
+      ) {
+        marketReplacementStrategyInput.value = parsed.marketReplacementStrategy;
+      } else {
+        const legacyEnabled = parsed.marketReplacementEnabled === "on";
+        marketReplacementStrategyInput.value =
+          legacyEnabled && parsed.marketReplacementStrategy === "flex" ? "flex" : legacyEnabled ? "strict" : "off";
+      }
     }
     if (typeof parsed.marketBudget === "string" && marketBudgetInput) {
       marketBudgetInput.value = parsed.marketBudget;
@@ -967,8 +966,13 @@ function getRoomWidthMode() {
   return value === "1" || value === "2" ? value : "any";
 }
 
+function getMarketReplacementMode() {
+  const value = marketReplacementStrategyInput?.value;
+  return value === "flex" || value === "strict" ? value : "off";
+}
+
 function getMarketReplacementEnabled() {
-  return marketReplacementEnabledInput?.value === "on";
+  return getMarketReplacementMode() !== "off";
 }
 
 function getMarketRecommendationMode() {
@@ -976,7 +980,56 @@ function getMarketRecommendationMode() {
 }
 
 function getMarketReplacementStrategy() {
-  return marketReplacementStrategyInput?.value === "flex" ? "flex" : "strict";
+  return getMarketReplacementMode() === "flex" ? "flex" : "strict";
+}
+
+function saveActiveTab(tabId) {
+  try {
+    localStorage.setItem(UI_ACTIVE_TAB_STORAGE_KEY, tabId);
+  } catch {
+    // Ignore localStorage write issues.
+  }
+}
+
+function setActiveTab(targetPanelId) {
+  if (!targetPanelId) return;
+
+  tabButtons.forEach((button) => {
+    const isActive = button.dataset.tabTarget === targetPanelId;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+    button.tabIndex = isActive ? 0 : -1;
+  });
+
+  tabPanels.forEach((panel) => {
+    const isActive = panel.id === targetPanelId;
+    panel.hidden = !isActive;
+    panel.classList.toggle("is-active", isActive);
+  });
+
+  saveActiveTab(targetPanelId);
+}
+
+function initializeTabs() {
+  if (tabButtons.length === 0 || tabPanels.length === 0) return;
+
+  tabButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      setActiveTab(button.dataset.tabTarget || "marketTabPanel");
+    });
+  });
+
+  let initialTabId = "marketTabPanel";
+  try {
+    const savedTabId = localStorage.getItem(UI_ACTIVE_TAB_STORAGE_KEY);
+    if (savedTabId && tabPanels.some((panel) => panel.id === savedTabId)) {
+      initialTabId = savedTabId;
+    }
+  } catch {
+    // Ignore malformed storage data.
+  }
+
+  setActiveTab(initialTabId);
 }
 
 function buildReplacementSetLabel(miners) {
@@ -2822,7 +2875,7 @@ function buildSingleRecommendationItems({
   return sortRecommendationItems(singleItems, sortMode);
 }
 
-function selectBudgetCombinationBuyPool(singleItems) {
+function selectBudgetCombinationBuyPool(singleItems, budget = null) {
   const positiveSingles = singleItems.filter((miner) => hasMeaningfulPositiveGain(miner.gainPower));
   const selected = new Map();
   const addItems = (items) => {
@@ -2840,6 +2893,11 @@ function selectBudgetCombinationBuyPool(singleItems) {
   addItems([...positiveSingles]
     .sort((leftItem, rightItem) => leftItem.price - rightItem.price || compareByGainThenEfficiencyDesc(leftItem, rightItem))
     .slice(0, Math.max(18, Math.floor(BUDGET_COMBINATION_BUY_POOL_LIMIT / 3))));
+  if (budget === null) {
+    addItems([...positiveSingles]
+      .sort((leftItem, rightItem) => rightItem.price - leftItem.price || compareByGainThenEfficiencyDesc(leftItem, rightItem))
+      .slice(0, Math.max(18, Math.floor(BUDGET_COMBINATION_BUY_POOL_LIMIT / 3))));
+  }
 
   return [...selected.values()].slice(0, BUDGET_COMBINATION_BUY_POOL_LIMIT);
 }
@@ -2999,13 +3057,14 @@ function buildBudgetCombinationOptions({
   buyPool,
 }) {
   const options = [];
+  const hasBudgetLimit = Number.isFinite(budget) && budget > 0;
 
   buyPool.forEach((singleItem, buyIndex) => {
     const purchaseMiner = singleItem?.purchaseMiners?.[0];
     if (!purchaseMiner) return;
 
     const price = Number(purchaseMiner.price);
-    if (!Number.isFinite(price) || price <= 0 || price > budget) return;
+    if (!Number.isFinite(price) || price <= 0 || (hasBudgetLimit && price > budget)) return;
 
     options.push({
       purchaseMiners: [purchaseMiner],
@@ -3086,11 +3145,12 @@ function buildBudgetCombinationItems({
   replacementSetsByWidth,
   sortMode,
 }) {
-  if (!Number.isFinite(budget) || budget <= 0) {
+  if (budget !== null && (!Number.isFinite(budget) || budget <= 0)) {
     return [];
   }
+  const hasBudgetLimit = Number.isFinite(budget) && budget > 0;
 
-  const buyPool = selectBudgetCombinationBuyPool(singleItems);
+  const buyPool = selectBudgetCombinationBuyPool(singleItems, budget);
   const atomicOptions = buildBudgetCombinationOptions({
     budget,
     buyPool,
@@ -3101,7 +3161,10 @@ function buildBudgetCombinationItems({
   }
 
   const minOptionPrice = Math.min(...atomicOptions.map((item) => item.price));
-  const maxDepth = Math.max(2, Math.min(5, Math.floor(budget / Math.max(minOptionPrice, 0.01))));
+  const maxDepth =
+    hasBudgetLimit
+      ? Math.max(2, Math.min(BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH, Math.floor(budget / Math.max(minOptionPrice, 0.01))))
+      : BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH;
   const bundleResults = new Map();
   let frontier = [{
     price: 0,
@@ -3123,7 +3186,7 @@ function buildBudgetCombinationItems({
         if ((state.buyMask & option.buyMask) !== 0n) continue;
 
         const totalPrice = state.price + option.price;
-        if (totalPrice > budget + 1e-9) continue;
+        if (hasBudgetLimit && totalPrice > budget + 1e-9) continue;
         const totalWidth = state.totalWidth + option.totalWidth;
         const replacementSet = replacementEnabled ? replacementSetsByWidth.get(totalWidth) : null;
         if (replacementEnabled && !replacementSet) continue;
@@ -3375,9 +3438,6 @@ function buildMarketRecommendations() {
   if (Number.isNaN(maxMinerPrice)) {
     throw new Error("Invalid max price value. Enter a non-negative number.");
   }
-  if (recommendationMode === "budget" && budget === null) {
-    throw new Error("Budget is required for budget combinations mode.");
-  }
   if (!currentSystem) {
     throw new Error("Current system is invalid. Sync RollerCoin power or enter valid base power and bonus.");
   }
@@ -3414,9 +3474,11 @@ function buildMarketRecommendations() {
       .filter((price) => Number.isFinite(price) && price > 0);
     const minFilteredPrice = positivePrices.length > 0 ? Math.min(...positivePrices) : NaN;
     const maxBudgetDepth =
-      Number.isFinite(minFilteredPrice) && minFilteredPrice > 0
-        ? Math.max(2, Math.min(5, Math.floor(budget / Math.max(minFilteredPrice, 0.01))))
-        : 2;
+      budget === null
+        ? BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH
+        : Number.isFinite(minFilteredPrice) && minFilteredPrice > 0
+          ? Math.max(2, Math.min(BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH, Math.floor(budget / Math.max(minFilteredPrice, 0.01))))
+          : 2;
     const maxMarketWidth = Math.max(
       0,
       ...filteredMarketMiners.map((miner) =>
@@ -3478,7 +3540,12 @@ function updateMarketRecommendationsView(statusMessage = "Recommendations update
   renderMarketRecommendations(recommendations.items, recommendations);
   renderRoomReplacementSuggestions(recommendations.upgradeItems, recommendations);
 
-  const budgetText = recommendations.budget === null ? "not set" : formatMarketValue(recommendations.budget, 2);
+  const budgetText =
+    recommendations.budget === null
+      ? recommendations.recommendationMode === "budget"
+        ? "unlimited"
+        : "not set"
+      : formatMarketValue(recommendations.budget, 2);
   const maxPriceText =
     recommendations.maxMinerPrice === null ? "not set" : formatMarketValue(recommendations.maxMinerPrice, 2);
   const sourceText = marketSourceInfo ? marketSourceInfo.endpoint : "cached";
@@ -4030,7 +4097,9 @@ function reindexRows() {
     row.dataset.index = String(idx + 1);
     row.querySelector(".candidate-index").textContent = String(idx + 1);
   });
-  candidateCountStat.textContent = String(rows.length);
+  if (candidateCountStat) {
+    candidateCountStat.textContent = String(rows.length);
+  }
 }
 
 function addCandidate() {
@@ -4364,23 +4433,12 @@ if (marketRecommendationModeInput) {
     }
   });
 }
-if (marketReplacementEnabledInput) {
-  marketReplacementEnabledInput.addEventListener("change", () => {
-    saveMarketSettings();
-    if (marketMinersCache.length === 0) return;
-    try {
-      updateMarketRecommendationsView("Replacement mode updated.", "success");
-    } catch (error) {
-      setMarketStatus(`Filter error: ${error.message}`, "error");
-    }
-  });
-}
 if (marketReplacementStrategyInput) {
   marketReplacementStrategyInput.addEventListener("change", () => {
     saveMarketSettings();
     if (marketMinersCache.length === 0) return;
     try {
-      updateMarketRecommendationsView("Replacement strategy updated.", "success");
+      updateMarketRecommendationsView("Replacement behavior updated.", "success");
     } catch (error) {
       setMarketStatus(`Filter error: ${error.message}`, "error");
     }
@@ -4446,6 +4504,7 @@ document.addEventListener("change", (event) => {
 
 restoreCurrentSystem();
 restoreMarketSettings();
+initializeTabs();
 updatePowerUnitLabels();
 restoreMarketMinersCache();
 bindMarketProgressListener();
