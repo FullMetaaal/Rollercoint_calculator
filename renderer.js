@@ -76,6 +76,8 @@ const POWER_MULTIPLIER = {
 const UNIT_ORDER = ["Gh/s", "Th/s", "Ph/s", "Eh/s", "Zh/s"];
 
 const CURRENT_SYSTEM_STORAGE_KEY = "rollercoin.currentSystem.v1";
+const ACTIVE_TAB_STORAGE_KEY = "rollercoin.activeTab.v1";
+const MARKET_VIEW_TAB_STORAGE_KEY = "rollercoin.marketViewTab.v1";
 const CURRENT_SYSTEM_FIELD_IDS = [
   "currentBasePowerValue",
   "currentBasePowerUnit",
@@ -86,6 +88,13 @@ const CURRENT_SYSTEM_FIELD_ID_SET = new Set(CURRENT_SYSTEM_FIELD_IDS);
 const ROLLERCOIN_MARKET_STORAGE_KEY = "rollercoin.marketSettings.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY = "rollercoin.marketMinersCache.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_VERSION = 2;
+const TRANSIENT_STORAGE_KEYS = [
+  CURRENT_SYSTEM_STORAGE_KEY,
+  ACTIVE_TAB_STORAGE_KEY,
+  MARKET_VIEW_TAB_STORAGE_KEY,
+  ROLLERCOIN_MARKET_STORAGE_KEY,
+  ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY,
+];
 const MARKET_FIELD_IDS = [
   "displayPowerUnit",
   "marketRoomWidthMode",
@@ -308,38 +317,11 @@ function readNonNegativeNumber(inputId, required = true) {
 }
 
 function saveCurrentSystem() {
-  try {
-    const currentSystem = {
-      currentBasePowerValue: document.getElementById("currentBasePowerValue").value,
-      currentBasePowerUnit: document.getElementById("currentBasePowerUnit").value,
-      currentBonusPercent: document.getElementById("currentBonusPercent").value,
-    };
-    localStorage.setItem(CURRENT_SYSTEM_STORAGE_KEY, JSON.stringify(currentSystem));
-  } catch {
-    // Ignore localStorage write issues.
-  }
+  // Persistence is intentionally disabled. Current system values live only for this app run.
 }
 
 function restoreCurrentSystem() {
-  try {
-    const raw = localStorage.getItem(CURRENT_SYSTEM_STORAGE_KEY);
-    if (!raw) return;
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return;
-
-    if (parsed.currentBasePowerValue !== undefined && parsed.currentBasePowerValue !== null) {
-      document.getElementById("currentBasePowerValue").value = String(parsed.currentBasePowerValue);
-    }
-    if (UNIT_ORDER.includes(parsed.currentBasePowerUnit)) {
-      document.getElementById("currentBasePowerUnit").value = parsed.currentBasePowerUnit;
-    }
-    if (parsed.currentBonusPercent !== undefined && parsed.currentBonusPercent !== null) {
-      document.getElementById("currentBonusPercent").value = String(parsed.currentBonusPercent);
-    }
-  } catch {
-    // Ignore malformed storage data.
-  }
+  // Persistence is intentionally disabled. Inputs always start from markup defaults.
 }
 
 function setCurrentSystemSyncStatus(message, tone = "neutral") {
@@ -631,102 +613,11 @@ function applyCurrentSystemFromRollercoin(powerSnapshot) {
 }
 
 function saveMarketSettings() {
-  if (!rollercoinCookieInput) return;
-
-  try {
-    const payload = {
-      displayPowerUnit: displayPowerUnitInput?.value ?? "Ph/s",
-      marketRoomWidthMode: marketRoomWidthModeInput?.value ?? "any",
-      marketRecommendationMode: marketRecommendationModeInput?.value ?? "single",
-      marketReplacementStrategy: marketReplacementStrategyInput?.value ?? "off",
-      rollercoinCookie: rollercoinCookieInput.value,
-      marketBudget: marketBudgetInput?.value ?? "",
-      marketMaxMinerPrice: marketMaxMinerPriceInput?.value ?? "",
-      marketSortMode: marketSortModeInput?.value ?? "gainPerPrice",
-      roomMinersSortMode: roomMinersSortModeInput?.value ?? "powerDesc",
-      roomMinersSearch: roomMinersSearchInput?.value ?? "",
-      marketTopN: marketTopNInput?.value ?? "",
-    };
-    localStorage.setItem(ROLLERCOIN_MARKET_STORAGE_KEY, JSON.stringify(payload));
-  } catch {
-    // Ignore localStorage write issues.
-  }
+  // Persistence is intentionally disabled. Market settings reset on each launch.
 }
 
 function restoreMarketSettings() {
-  if (!rollercoinCookieInput) return;
-
-  try {
-    const raw = localStorage.getItem(ROLLERCOIN_MARKET_STORAGE_KEY);
-    if (!raw) return;
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return;
-
-    if (typeof parsed.rollercoinCookie === "string") {
-      rollercoinCookieInput.value = parsed.rollercoinCookie;
-    }
-    if (typeof parsed.displayPowerUnit === "string" && displayPowerUnitInput) {
-      const displayUnit = normalizePowerUnit(parsed.displayPowerUnit);
-      if (displayUnit) {
-        displayPowerUnitInput.value = displayUnit;
-      }
-    }
-    if (
-      typeof parsed.marketRoomWidthMode === "string" &&
-      marketRoomWidthModeInput &&
-      ["any", "1", "2"].includes(parsed.marketRoomWidthMode)
-    ) {
-      marketRoomWidthModeInput.value = parsed.marketRoomWidthMode;
-    }
-    if (
-      typeof parsed.marketRecommendationMode === "string" &&
-      marketRecommendationModeInput &&
-      ["single", "budget"].includes(parsed.marketRecommendationMode)
-    ) {
-      marketRecommendationModeInput.value = parsed.marketRecommendationMode;
-    }
-    if (marketReplacementStrategyInput) {
-      if (
-        typeof parsed.marketReplacementStrategy === "string" &&
-        ["off", "strict", "flex"].includes(parsed.marketReplacementStrategy)
-      ) {
-        marketReplacementStrategyInput.value = parsed.marketReplacementStrategy;
-      } else {
-        const legacyEnabled = parsed.marketReplacementEnabled === "on";
-        marketReplacementStrategyInput.value =
-          legacyEnabled && parsed.marketReplacementStrategy === "flex" ? "flex" : legacyEnabled ? "strict" : "off";
-      }
-    }
-    if (typeof parsed.marketBudget === "string" && marketBudgetInput) {
-      marketBudgetInput.value = parsed.marketBudget;
-    }
-    if (typeof parsed.marketMaxMinerPrice === "string" && marketMaxMinerPriceInput) {
-      marketMaxMinerPriceInput.value = parsed.marketMaxMinerPrice;
-    }
-    if (
-      typeof parsed.marketSortMode === "string" &&
-      marketSortModeInput &&
-      ["gainPerPrice", "gainPower"].includes(parsed.marketSortMode)
-    ) {
-      marketSortModeInput.value = parsed.marketSortMode;
-    }
-    if (
-      typeof parsed.roomMinersSortMode === "string" &&
-      roomMinersSortModeInput &&
-      ["powerDesc", "bonusDesc", "widthAsc", "nameAsc"].includes(parsed.roomMinersSortMode)
-    ) {
-      roomMinersSortModeInput.value = parsed.roomMinersSortMode;
-    }
-    if (typeof parsed.roomMinersSearch === "string" && roomMinersSearchInput) {
-      roomMinersSearchInput.value = parsed.roomMinersSearch;
-    }
-    if (typeof parsed.marketTopN === "string" && marketTopNInput) {
-      marketTopNInput.value = parsed.marketTopN;
-    }
-  } catch {
-    // Ignore malformed storage data.
-  }
+  // Persistence is intentionally disabled. Market settings always start clean.
 }
 
 function formatMarketDateTime(timestamp) {
@@ -763,81 +654,11 @@ function normalizeMarketSourceInfo(rawSourceInfo, fallbackScore = 0) {
 }
 
 function saveMarketMinersCache() {
-  try {
-    if (!Array.isArray(marketMinersCache) || marketMinersCache.length === 0) {
-      localStorage.removeItem(ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY);
-      return;
-    }
-
-    const payload = {
-      version: ROLLERCOIN_MARKET_MINERS_CACHE_VERSION,
-      savedAt: Date.now(),
-      sourceInfo: normalizeMarketSourceInfo(marketSourceInfo, marketMinersCache.length),
-      miners: marketMinersCache,
-    };
-
-    localStorage.setItem(ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY, JSON.stringify(payload));
-  } catch {
-    // Ignore localStorage write issues.
-  }
+  // Persistence is intentionally disabled. Market miners stay in memory only.
 }
 
 function restoreMarketMinersCache() {
-  try {
-    const raw = localStorage.getItem(ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY);
-    if (!raw) return false;
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return false;
-    if (Array.isArray(parsed) || Number(parsed.version) !== ROLLERCOIN_MARKET_MINERS_CACHE_VERSION) {
-      localStorage.removeItem(ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY);
-      return false;
-    }
-
-    const rawMiners = parsed.miners;
-    const normalizedMiners = normalizeCachedMarketMiners(rawMiners);
-    if (normalizedMiners.length === 0) {
-      localStorage.removeItem(ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY);
-      return false;
-    }
-
-    marketMinersCache = normalizedMiners;
-    const sourceBase =
-      parsed.sourceInfo && typeof parsed.sourceInfo === "object"
-        ? parsed.sourceInfo
-        : { loadedAt: Number(parsed.savedAt) || Date.now() };
-    marketSourceInfo = normalizeMarketSourceInfo(sourceBase, normalizedMiners.length);
-    appendMarketLog(
-      `Loaded ${normalizedMiners.length} miners from local cache (${formatMarketDateTime(marketSourceInfo.loadedAt)}).`,
-      "info",
-    );
-
-    try {
-      updateMarketRecommendationsView(
-        `Loaded ${normalizedMiners.length} cached miners. Click "Load miners from market" to refresh.`,
-        "success",
-      );
-      if (getMarketReplacementEnabled() && roomMinersCache.length === 0) {
-        setRoomMinersStatus(
-          "Replacement mode is enabled, but room miners are not loaded yet. Showing cached market miners without replacement suggestions.",
-          "neutral",
-        );
-      }
-    } catch (error) {
-      renderMarketRecommendations([]);
-      if (marketSummary) {
-        marketSummary.textContent = "";
-      }
-      setMarketStatus(
-        `Loaded cached miners (${normalizedMiners.length}), but filters are invalid: ${error.message}`,
-        "error",
-      );
-    }
-
-    return true;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 function setMarketStatus(message, tone = "neutral") {
@@ -1040,12 +861,8 @@ function getMarketReplacementStrategy() {
 }
 
 function saveActiveTab(storageKey, tabId) {
-  if (!storageKey || !tabId) return;
-  try {
-    localStorage.setItem(storageKey, tabId);
-  } catch {
-    // Ignore localStorage write issues.
-  }
+  void storageKey;
+  void tabId;
 }
 
 function setActiveTab(groupName, targetPanelId, storageKey = "") {
@@ -1106,19 +923,24 @@ function initializeTabs() {
       group.buttons.find((button) => button.classList.contains("is-active"))?.dataset.tabTarget ||
       panels[0].id;
 
-    if (group.storageKey) {
-      try {
-        const savedTabId = localStorage.getItem(group.storageKey);
-        if (savedTabId && panels.some((panel) => panel.id === savedTabId)) {
-          initialTabId = savedTabId;
-        }
-      } catch {
-        // Ignore malformed storage data.
-      }
-    }
-
     setActiveTab(groupName, initialTabId, group.storageKey || "");
   });
+}
+
+function clearTransientLocalState() {
+  try {
+    TRANSIENT_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // Ignore localStorage cleanup failures.
+  }
+
+  marketMinersCache = [];
+  marketSourceInfo = null;
+  roomMinersCache = [];
+
+  if (rollercoinCookieInput) {
+    rollercoinCookieInput.value = "";
+  }
 }
 
 function buildReplacementSetLabel(miners) {
@@ -4486,11 +4308,10 @@ function refreshPowerUnitViews() {
 }
 
 async function initializeRollercoinSessionState() {
-  await Promise.allSettled([
-    checkRollercoinAuthStatus({ silent: true }),
-    refreshCurrentPowerFromRollercoin({ silent: true, allowUnauthenticated: true }),
-    loadRoomMinersFromRollercoin({ silent: true, allowUnauthenticated: true }),
-  ]);
+  setAuthIndicatorState("invalid", "No saved RollerCoin session. Login is required.");
+  setMarketStatus("Login to RollerCoin to load fresh data.", "neutral");
+  setCurrentSystemSyncStatus("RollerCoin power sync is available after login.", "neutral");
+  setRoomMinersStatus("Room miners are not loaded. Login to RollerCoin first.", "neutral");
 }
 
 addCandidateBtn.addEventListener("click", () => {
@@ -4638,15 +4459,11 @@ document.addEventListener("change", (event) => {
   }
 });
 
-restoreCurrentSystem();
-restoreMarketSettings();
+clearTransientLocalState();
 initializeTabs();
 updatePowerUnitLabels();
-restoreMarketMinersCache();
 bindMarketProgressListener();
 addCandidate();
 updateCurrentStats();
-setCurrentSystemSyncStatus("RollerCoin power sync is idle.");
-setRoomMinersStatus("Room miners are not loaded.");
 renderRoomMinersCollection([]);
 initializeRollercoinSessionState();

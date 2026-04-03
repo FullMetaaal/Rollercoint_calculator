@@ -9,7 +9,9 @@ let autoUpdater = null;
 let autoUpdaterConfigured = false;
 let autoUpdaterLoadFailed = false;
 let autoUpdateCheckInFlight = null;
-const ROLLERCOIN_PARTITION = "persist:rollercoin-auth";
+const DEV_PROFILE_SUFFIX = "v2";
+const ROLLERCOIN_PARTITION = "rollercoin-auth";
+const LEGACY_ROLLERCOIN_PARTITION = "persist:rollercoin-auth";
 const ENABLE_INTERACTIVE_MARKET_SCANNER = true;
 const MARKET_PAGE_LIMIT = 100;
 const MARKET_MAX_PAGES = 250;
@@ -53,11 +55,15 @@ function getRoamingAppDataPath() {
   return process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
 }
 
+function getDevUserDataPath() {
+  return path.join(getRoamingAppDataPath(), `roller-coin-calculator-dev-${DEV_PROFILE_SUFFIX}`);
+}
+
 function configureStoragePaths() {
   try {
     const userDataPath = app.isPackaged
       ? path.join(getRoamingAppDataPath(), "roller-coin-calculator")
-      : path.join(getRoamingAppDataPath(), "roller-coin-calculator-dev");
+      : getDevUserDataPath();
     if (ensureDirSafe(userDataPath)) {
       app.setPath("userData", userDataPath);
       writeStartupLog("Configured userData path.", { userDataPath });
@@ -69,7 +75,7 @@ function configureStoragePaths() {
   try {
     const cacheBasePath = app.isPackaged
       ? path.join(app.getPath("temp"), "roller-coin-calculator-cache")
-      : path.join(app.getPath("temp"), "roller-coin-calculator-dev-cache");
+      : path.join(app.getPath("temp"), `roller-coin-calculator-dev-cache-${DEV_PROFILE_SUFFIX}`);
     const httpCachePath = path.join(cacheBasePath, "http-cache");
     const gpuCachePath = path.join(cacheBasePath, "gpu-cache");
 
@@ -115,6 +121,34 @@ function attachRollercoinAssetRequestHeaders(targetSession) {
       callback({ requestHeaders });
     },
   );
+}
+
+async function clearSessionData(targetSession, label) {
+  if (!targetSession) return;
+
+  try {
+    await targetSession.clearStorageData();
+  } catch (error) {
+    writeStartupLog("Failed to clear session storage data.", {
+      label,
+      message: error?.message || String(error),
+    });
+  }
+
+  try {
+    await targetSession.clearCache();
+  } catch (error) {
+    writeStartupLog("Failed to clear session cache.", {
+      label,
+      message: error?.message || String(error),
+    });
+  }
+}
+
+async function resetEphemeralBrowserState() {
+  await clearSessionData(session.defaultSession, "default");
+  await clearSessionData(session.fromPartition(ROLLERCOIN_PARTITION), "auth");
+  await clearSessionData(session.fromPartition(LEGACY_ROLLERCOIN_PARTITION), "legacy-auth");
 }
 
 configureStoragePaths();
@@ -330,6 +364,11 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
     updater.once("error", onError);
 
     Promise.resolve()
+      .then(() => {
+        if (manual) {
+          logAutoUpdate("Manual update check requested.");
+        }
+      })
       .then(() => updater.checkForUpdates())
       .catch(onError);
   });
@@ -482,6 +521,22 @@ async function readRollercoinCookies(session) {
 
 function openRollercoinAuthWindow() {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const authSession = session.fromPartition(ROLLERCOIN_PARTITION);
+    attachRollercoinAssetRequestHeaders(authSession);
+
+    const finishResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
     const authWindow = new BrowserWindow({
       width: 1100,
       height: 800,
@@ -496,18 +551,51 @@ function openRollercoinAuthWindow() {
       },
     });
 
-    const authSession = authWindow.webContents.session;
-
-    authWindow.on("closed", async () => {
+    authWindow.once("closed", async () => {
       try {
         const sessionInfo = await readRollercoinCookies(authSession);
-        resolve(sessionInfo);
+        writeStartupLog("Auth window closed.", {
+          cookieCount: sessionInfo.cookieCount,
+          hasSessionCookie: sessionInfo.hasSessionCookie,
+        });
+        finishResolve(sessionInfo);
       } catch (error) {
-        reject(error);
+        writeStartupLog("Failed to read auth session cookies after closing login window.", {
+          message: error?.message || String(error),
+        });
+        finishReject(error);
       }
     });
 
-    authWindow.loadURL("https://rollercoin.com/sign-in").catch(reject);
+    authWindow.webContents.on(
+      "did-fail-load",
+      (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (!isMainFrame) return;
+        writeStartupLog("Auth window failed to load.", {
+          errorCode,
+          errorDescription,
+          validatedURL,
+        });
+      },
+    );
+
+    authWindow.webContents.on("render-process-gone", (_event, details) => {
+      writeStartupLog("Auth window render process gone.", details);
+      finishReject(new Error(`Login window crashed: ${details?.reason || "unknown reason"}`));
+      if (!authWindow.isDestroyed()) {
+        authWindow.close();
+      }
+    });
+
+    authWindow.loadURL("https://rollercoin.com/sign-in").catch((error) => {
+      writeStartupLog("Auth window loadURL failed.", {
+        message: error?.message || String(error),
+      });
+      finishReject(error);
+      if (!authWindow.isDestroyed()) {
+        authWindow.close();
+      }
+    });
   });
 }
 
@@ -5531,12 +5619,12 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
 }
 
 if (hasSingleInstanceLock) {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     writeStartupLog("App ready.");
+    await resetEphemeralBrowserState();
     Menu.setApplicationMenu(buildApplicationMenu());
     attachRollercoinAssetRequestHeaders(session.defaultSession);
     attachRollercoinAssetRequestHeaders(session.fromPartition(ROLLERCOIN_PARTITION));
-    setupAutoUpdater();
     createWindow();
     scheduleAutoUpdateCheck();
 
@@ -5615,6 +5703,30 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   writeStartupLog("before-quit fired.");
+});
+
+app.on("will-quit", (_event) => {
+  writeStartupLog("will-quit fired.");
+});
+
+app.on("quit", (_event, exitCode) => {
+  writeStartupLog("quit fired.", { exitCode });
+});
+
+app.on("browser-window-created", (_event, window) => {
+  writeStartupLog("browser-window-created fired.", {
+    id: window?.id || null,
+  });
+
+  window.on("closed", () => {
+    writeStartupLog("browser-window closed.", {
+      id: window?.id || null,
+    });
+  });
+});
+
+app.on("child-process-gone", (_event, details) => {
+  writeStartupLog("child-process-gone fired.", details);
 });
 
 process.on("uncaughtException", (error) => {

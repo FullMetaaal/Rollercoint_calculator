@@ -4,7 +4,7 @@
   "description": "Electron calculator for RollerCoin miner choice",
   "main": "main.js",
   "scripts": {
-    "start": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; Remove-Item Env:CHROME_CRASHPAD_PIPE_NAME -ErrorAction SilentlyContinue; & (Resolve-Path '.\\\\node_modules\\\\electron\\\\dist\\\\electron.exe') .\"",
+    "start": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; Remove-Item Env:CHROME_CRASHPAD_PIPE_NAME -ErrorAction SilentlyContinue; Remove-Item Env:CHROME_HEADLESS -ErrorAction SilentlyContinue; Remove-Item Env:VSCODE_CRASH_REPORTER_PROCESS_TYPE -ErrorAction SilentlyContinue; Remove-Item Env:VSCODE_CRASH_REPORTER_SANDBOXED_HINT -ErrorAction SilentlyContinue; & (Resolve-Path '.\\\\node_modules\\\\electron\\\\dist\\\\electron.exe') . --no-sandbox --disable-features=RendererCodeIntegrity\"",
     "build": "electron-builder",
     "dist:win": "electron-builder --win nsis",
     "release:win": "electron-builder --win nsis --publish always"
