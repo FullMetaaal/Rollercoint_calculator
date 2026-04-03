@@ -387,10 +387,19 @@ button.ghost:hover {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
+  gap: 12px;
 }
 
 .header-row > :first-child {
   min-width: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .section-subtitle {

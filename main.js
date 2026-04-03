@@ -6,6 +6,7 @@ const path = require("path");
 
 let mainWindow;
 let autoUpdaterConfigured = false;
+let autoUpdateCheckInFlight = null;
 const ROLLERCOIN_PARTITION = "persist:rollercoin-auth";
 const ENABLE_INTERACTIVE_MARKET_SCANNER = true;
 const MARKET_PAGE_LIMIT = 100;
@@ -180,12 +181,163 @@ function scheduleAutoUpdateCheck() {
   }
 
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((error) => {
-      logAutoUpdate("Failed to check for updates.", {
-        message: error?.message || String(error),
-      });
-    });
+    triggerAutoUpdateCheck({ manual: false });
   }, 15000);
+}
+
+function triggerAutoUpdateCheck({ manual = false } = {}) {
+  if (!app.isPackaged) {
+    return Promise.resolve({
+      started: false,
+      status: "unavailable",
+      message: "App updates are available only in packaged builds.",
+    });
+  }
+
+  setupAutoUpdater();
+
+  if (autoUpdateCheckInFlight) {
+    return Promise.resolve({
+      started: false,
+      status: "checking",
+      message: "Update check is already in progress.",
+    });
+  }
+
+  autoUpdateCheckInFlight = new Promise((resolve) => {
+    let settled = false;
+
+    const cleanup = () => {
+      autoUpdater.removeListener("update-available", onUpdateAvailable);
+      autoUpdater.removeListener("update-not-available", onUpdateNotAvailable);
+      autoUpdater.removeListener("error", onError);
+    };
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      autoUpdateCheckInFlight = null;
+      resolve(result);
+    };
+
+    const onUpdateAvailable = (info) => {
+      finish({
+        started: true,
+        status: "update-available",
+        version: info?.version || null,
+        message: `Update ${info?.version || "new"} found. Download started in the background.`,
+      });
+    };
+
+    const onUpdateNotAvailable = (info) => {
+      const resolvedVersion = info?.version || app.getVersion();
+      finish({
+        started: true,
+        status: "up-to-date",
+        version: resolvedVersion,
+        message: `You're already using the latest version (${resolvedVersion}).`,
+      });
+    };
+
+    const onError = (error) => {
+      const message = error?.message || String(error);
+      if (!manual) {
+        logAutoUpdate("Failed to check for updates.", { message });
+      }
+      finish({
+        started: true,
+        status: "error",
+        message: `Update check failed: ${message}`,
+      });
+    };
+
+    autoUpdater.once("update-available", onUpdateAvailable);
+    autoUpdater.once("update-not-available", onUpdateNotAvailable);
+    autoUpdater.once("error", onError);
+
+    Promise.resolve()
+      .then(() => autoUpdater.checkForUpdates())
+      .catch(onError);
+  });
+
+  return autoUpdateCheckInFlight;
+}
+
+function buildApplicationMenu() {
+  const template = [];
+
+  if (process.platform === "darwin") {
+    template.push({
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    });
+  }
+
+  template.push({
+    label: "View",
+    submenu: [
+      { role: "reload" },
+      { role: "forceReload" },
+      { role: "toggleDevTools" },
+      { type: "separator" },
+      { role: "resetZoom" },
+      { role: "zoomIn" },
+      { role: "zoomOut" },
+      { type: "separator" },
+      { role: "togglefullscreen" },
+    ],
+  });
+
+  template.push({
+    label: "Help",
+    submenu: [
+      {
+        label: "Check for Updates",
+        click: async () => {
+          const result = await triggerAutoUpdateCheck({ manual: true });
+          const { dialog } = require("electron");
+          const targetWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+          const title =
+            result.status === "error"
+              ? "Update Check Failed"
+              : result.status === "update-available"
+                ? "Update Found"
+                : result.status === "checking"
+                  ? "Update Check Running"
+                  : result.status === "unavailable"
+                    ? "Updates Unavailable"
+                    : "No Updates Found";
+
+          const dialogOptions = {
+            type: result.status === "error" ? "error" : "info",
+            buttons: ["OK"],
+            defaultId: 0,
+            title,
+            message: result.message || "App update check finished.",
+          };
+
+          if (targetWindow) {
+            await dialog.showMessageBox(targetWindow, dialogOptions);
+          } else {
+            await dialog.showMessageBox(dialogOptions);
+          }
+        },
+      },
+    ],
+  });
+
+  return Menu.buildFromTemplate(template);
 }
 
 function createWindow() {
@@ -5266,7 +5418,7 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
 
 if (hasSingleInstanceLock) {
   app.whenReady().then(() => {
-    Menu.setApplicationMenu(null);
+    Menu.setApplicationMenu(buildApplicationMenu());
     attachRollercoinAssetRequestHeaders(session.defaultSession);
     attachRollercoinAssetRequestHeaders(session.fromPartition(ROLLERCOIN_PARTITION));
     setupAutoUpdater();
@@ -5326,6 +5478,9 @@ if (hasSingleInstanceLock) {
 
       progress("Request accepted. Starting market miners loading flow...");
       return fetchMarketViaSession({ cookieHeader }, progress);
+    });
+    ipcMain.handle("app-updates-check", async () => {
+      return triggerAutoUpdateCheck({ manual: true });
     });
 
     app.on("activate", () => {

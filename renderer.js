@@ -60,6 +60,7 @@ const displayPowerUnitInput = document.getElementById("displayPowerUnit");
 const authTokenIndicator = document.getElementById("authTokenIndicator");
 const authTokenMessage = document.getElementById("authTokenMessage");
 const authActionBtn = document.getElementById("authActionBtn");
+const checkAppUpdatesBtn = document.getElementById("checkAppUpdatesBtn");
 const rollercoinLoginBtn = document.getElementById("rollercoinLoginBtn");
 const rollercoinCookieInput = document.getElementById("rollercoinCookie");
 const marketRoomWidthModeInput = document.getElementById("marketRoomWidthMode");
@@ -103,6 +104,7 @@ let marketProgressListenerBound = false;
 let marketLogLines = [];
 let authStatusState = "checking";
 let authStatusCheckInFlight = false;
+let appUpdateCheckInFlight = false;
 let currentPowerSyncInFlight = false;
 let roomMinersLoadInFlight = false;
 let visibleRoomMinersCount = 25;
@@ -3917,6 +3919,46 @@ function setMarketControlsDisabled(isDisabled) {
   });
 }
 
+async function handleCheckAppUpdates() {
+  if (appUpdateCheckInFlight) return;
+
+  if (!ipcRenderer || typeof ipcRenderer.invoke !== "function") {
+    setMarketStatus("App update check is unavailable in this build.", "error");
+    return;
+  }
+
+  appUpdateCheckInFlight = true;
+  const originalLabel = checkAppUpdatesBtn ? checkAppUpdatesBtn.textContent : "";
+  if (checkAppUpdatesBtn) {
+    checkAppUpdatesBtn.disabled = true;
+    checkAppUpdatesBtn.textContent = "Checking...";
+  }
+  setMarketStatus("Checking for app updates...", "neutral");
+
+  try {
+    const result = await ipcRenderer.invoke("app-updates-check");
+    const status = typeof result?.status === "string" ? result.status : "unknown";
+    const message =
+      typeof result?.message === "string" && result.message.trim()
+        ? result.message
+        : "App update check finished.";
+    const tone = status === "error" ? "error" : status === "update-available" ? "success" : "neutral";
+
+    appendMarketLog(`App update check: ${message}`, tone === "error" ? "error" : "info");
+    setMarketStatus(message, tone);
+  } catch (error) {
+    const message = `App update check failed: ${error.message}`;
+    appendMarketLog(message, "error");
+    setMarketStatus(message, "error");
+  } finally {
+    appUpdateCheckInFlight = false;
+    if (checkAppUpdatesBtn) {
+      checkAppUpdatesBtn.disabled = false;
+      checkAppUpdatesBtn.textContent = originalLabel || "Check for app updates";
+    }
+  }
+}
+
 async function handleLoadRoomMiners() {
   const result = await loadRoomMinersFromRollercoin({ silent: false });
   if (!result || marketMinersCache.length === 0) return;
@@ -4396,6 +4438,9 @@ calculateBtn.addEventListener("click", recalculateLive);
 
 if (rollercoinLoginBtn) {
   rollercoinLoginBtn.addEventListener("click", handleRollercoinLogin);
+}
+if (checkAppUpdatesBtn) {
+  checkAppUpdatesBtn.addEventListener("click", handleCheckAppUpdates);
 }
 if (loadMarketMinersBtn) {
   loadMarketMinersBtn.addEventListener("click", handleLoadMarketMiners);
