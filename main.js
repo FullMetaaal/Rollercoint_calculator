@@ -106,6 +106,7 @@ function setupAutoUpdater() {
   autoUpdaterConfigured = true;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = true;
 
   autoUpdater.on("checking-for-update", () => {
     logAutoUpdate("Checking for updates...");

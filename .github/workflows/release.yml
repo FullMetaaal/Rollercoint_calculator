@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -24,16 +26,47 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Sync package version from tag
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          npm version $version --no-git-tag-version
-
       - name: Install dependencies
         run: npm ci
+
+      - name: Resolve release version and channel
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+            "APP_VERSION=$version" >> $env:GITHUB_ENV
+            "EP_PRE_RELEASE=false" >> $env:GITHUB_ENV
+            "RELEASE_KIND=stable" >> $env:GITHUB_ENV
+          } else {
+            $baseVersion = node -p "require('./package.json').version.split('-')[0]"
+            $parts = $baseVersion.Split('.')
+            if ($parts.Length -lt 3) {
+              throw "package.json version must be semver-compatible"
+            }
+
+            $major = [int]$parts[0]
+            $minor = [int]$parts[1]
+            $patch = [int]$parts[2] + 1
+            $version = "$major.$minor.$patch-beta.${{ github.run_number }}"
+
+            "APP_VERSION=$version" >> $env:GITHUB_ENV
+            "EP_PRE_RELEASE=true" >> $env:GITHUB_ENV
+            "RELEASE_KIND=prerelease" >> $env:GITHUB_ENV
+          }
+
+      - name: Apply app version
+        shell: pwsh
+        run: |
+          npm version "${{ env.APP_VERSION }}" --no-git-tag-version
+
+      - name: Show resolved release info
+        shell: pwsh
+        run: |
+          Write-Host "Release kind: ${{ env.RELEASE_KIND }}"
+          Write-Host "App version:  ${{ env.APP_VERSION }}"
 
       - name: Build and publish Windows release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EP_PRE_RELEASE: ${{ env.EP_PRE_RELEASE }}
         run: npm run release:win
