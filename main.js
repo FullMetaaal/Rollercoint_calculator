@@ -1,11 +1,13 @@
 ﻿const { app, BrowserWindow, Menu, ipcMain, session } = require("electron");
-const { autoUpdater } = require("electron-updater");
 const fs = require("fs");
 const https = require("https");
+const os = require("os");
 const path = require("path");
 
 let mainWindow;
+let autoUpdater = null;
 let autoUpdaterConfigured = false;
+let autoUpdaterLoadFailed = false;
 let autoUpdateCheckInFlight = null;
 const ROLLERCOIN_PARTITION = "persist:rollercoin-auth";
 const ENABLE_INTERACTIVE_MARKET_SCANNER = true;
@@ -21,6 +23,22 @@ const MARKET_HTTPS_AGENT = new https.Agent({
   maxSockets: Math.max(MARKET_DIRECT_PAGE_BATCH_SIZE * 2, 8),
   maxFreeSockets: Math.max(MARKET_DIRECT_PAGE_BATCH_SIZE, 4),
 });
+const STARTUP_LOG_PATH = path.join(os.tmpdir(), "roller-coin-calculator-startup.log");
+
+function writeStartupLog(message, extra = null) {
+  const suffix = extra ? ` ${JSON.stringify(extra)}` : "";
+  try {
+    fs.appendFileSync(
+      STARTUP_LOG_PATH,
+      `[${new Date().toISOString()}] ${message}${suffix}\n`,
+      "utf8",
+    );
+  } catch {
+    // Ignore logging failures.
+  }
+}
+
+writeStartupLog("main.js loaded.");
 
 function ensureDirSafe(dirPath) {
   try {
@@ -33,16 +51,21 @@ function ensureDirSafe(dirPath) {
 
 function configureStoragePaths() {
   try {
-    const userDataPath = path.join(app.getPath("appData"), "roller-coin-calculator");
+    const userDataPath = app.isPackaged
+      ? path.join(app.getPath("appData"), "roller-coin-calculator")
+      : path.join(__dirname, ".electron-user-data-dev");
     if (ensureDirSafe(userDataPath)) {
       app.setPath("userData", userDataPath);
+      writeStartupLog("Configured userData path.", { userDataPath });
     }
   } catch {
     // Keep Electron defaults if custom path setup fails.
   }
 
   try {
-    const cacheBasePath = path.join(app.getPath("temp"), "roller-coin-calculator-cache");
+    const cacheBasePath = app.isPackaged
+      ? path.join(app.getPath("temp"), "roller-coin-calculator-cache")
+      : path.join(__dirname, ".electron-cache-dev");
     const httpCachePath = path.join(cacheBasePath, "http-cache");
     const gpuCachePath = path.join(cacheBasePath, "gpu-cache");
 
@@ -57,6 +80,9 @@ function configureStoragePaths() {
     // Ignore cache path customization issues.
   }
 }
+
+// This app does not rely on GPU-heavy rendering, so prefer stability over hardware acceleration.
+app.disableHardwareAcceleration();
 
 function attachRollercoinAssetRequestHeaders(targetSession) {
   if (!targetSession || targetSession.__rollercoinAssetHeadersBound) return;
@@ -89,7 +115,14 @@ function attachRollercoinAssetRequestHeaders(targetSession) {
 
 configureStoragePaths();
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const shouldUseSingleInstanceLock = app.isPackaged;
+const hasSingleInstanceLock = shouldUseSingleInstanceLock
+  ? app.requestSingleInstanceLock()
+  : true;
+writeStartupLog("Single instance lock requested.", {
+  enabled: shouldUseSingleInstanceLock,
+  acquired: hasSingleInstanceLock,
+});
 if (!hasSingleInstanceLock) {
   app.quit();
 }
@@ -99,34 +132,66 @@ function logAutoUpdate(message, extra = null) {
   console.info(`[auto-update] ${message}${suffix}`);
 }
 
+function getAutoUpdater() {
+  if (autoUpdater) {
+    return autoUpdater;
+  }
+
+  if (autoUpdaterLoadFailed) {
+    return null;
+  }
+
+  try {
+    const updaterModule = require("electron-updater");
+    autoUpdater = updaterModule?.autoUpdater || null;
+
+    if (!autoUpdater) {
+      throw new Error("electron-updater did not expose autoUpdater.");
+    }
+
+    return autoUpdater;
+  } catch (error) {
+    autoUpdaterLoadFailed = true;
+    logAutoUpdate("Auto-update module unavailable.", {
+      message: error?.message || String(error),
+    });
+    return null;
+  }
+}
+
 function setupAutoUpdater() {
   if (autoUpdaterConfigured || !app.isPackaged) {
     return;
   }
 
-  autoUpdaterConfigured = true;
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.allowPrerelease = true;
+  const updater = getAutoUpdater();
+  if (!updater) {
+    return;
+  }
 
-  autoUpdater.on("checking-for-update", () => {
+  autoUpdaterConfigured = true;
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.allowPrerelease = true;
+
+  updater.on("checking-for-update", () => {
     logAutoUpdate("Checking for updates...");
   });
 
-  autoUpdater.on("update-available", (info) => {
+  updater.on("update-available", (info) => {
     logAutoUpdate("Update available.", {
       version: info?.version || null,
       files: Array.isArray(info?.files) ? info.files.length : 0,
     });
   });
 
-  autoUpdater.on("update-not-available", (info) => {
+  updater.on("update-not-available", (info) => {
     logAutoUpdate("No updates available.", {
       version: info?.version || app.getVersion(),
     });
   });
 
-  autoUpdater.on("download-progress", (progress) => {
+  updater.on("download-progress", (progress) => {
     logAutoUpdate("Download progress.", {
       percent: Number.isFinite(Number(progress?.percent)) ? Number(progress.percent).toFixed(1) : null,
       transferred: progress?.transferred || 0,
@@ -134,13 +199,13 @@ function setupAutoUpdater() {
     });
   });
 
-  autoUpdater.on("error", (error) => {
+  updater.on("error", (error) => {
     logAutoUpdate("Auto-update error.", {
       message: error?.message || String(error),
     });
   });
 
-  autoUpdater.on("update-downloaded", async (info) => {
+  updater.on("update-downloaded", async (info) => {
     logAutoUpdate("Update downloaded.", {
       version: info?.version || null,
     });
@@ -164,7 +229,7 @@ function setupAutoUpdater() {
 
       if (result.response === 0) {
         setImmediate(() => {
-          autoUpdater.quitAndInstall(false, true);
+          updater.quitAndInstall(false, true);
         });
       }
     } catch (error) {
@@ -195,6 +260,14 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
   }
 
   setupAutoUpdater();
+  const updater = getAutoUpdater();
+  if (!updater) {
+    return Promise.resolve({
+      started: false,
+      status: "unavailable",
+      message: "Auto-update is temporarily unavailable in this build.",
+    });
+  }
 
   if (autoUpdateCheckInFlight) {
     return Promise.resolve({
@@ -208,9 +281,9 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
     let settled = false;
 
     const cleanup = () => {
-      autoUpdater.removeListener("update-available", onUpdateAvailable);
-      autoUpdater.removeListener("update-not-available", onUpdateNotAvailable);
-      autoUpdater.removeListener("error", onError);
+      updater.removeListener("update-available", onUpdateAvailable);
+      updater.removeListener("update-not-available", onUpdateNotAvailable);
+      updater.removeListener("error", onError);
     };
 
     const finish = (result) => {
@@ -252,12 +325,12 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
       });
     };
 
-    autoUpdater.once("update-available", onUpdateAvailable);
-    autoUpdater.once("update-not-available", onUpdateNotAvailable);
-    autoUpdater.once("error", onError);
+    updater.once("update-available", onUpdateAvailable);
+    updater.once("update-not-available", onUpdateNotAvailable);
+    updater.once("error", onError);
 
     Promise.resolve()
-      .then(() => autoUpdater.checkForUpdates())
+      .then(() => updater.checkForUpdates())
       .catch(onError);
   });
 
@@ -341,6 +414,7 @@ function buildApplicationMenu() {
 }
 
 function createWindow() {
+  writeStartupLog("Creating main window.");
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
@@ -350,7 +424,35 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "index.html"));
+  mainWindow.on("closed", () => {
+    writeStartupLog("Main window closed.");
+  });
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    writeStartupLog("Main window finished loading.");
+  });
+
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      writeStartupLog("Main window failed to load.", {
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      });
+    },
+  );
+
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    writeStartupLog("Renderer process gone.", details);
+  });
+
+  mainWindow.loadFile(path.join(__dirname, "index.html")).catch((error) => {
+    writeStartupLog("loadFile threw an error.", {
+      message: error?.message || String(error),
+    });
+  });
 }
 
 async function readRollercoinCookies(session) {
@@ -5418,6 +5520,7 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
 
 if (hasSingleInstanceLock) {
   app.whenReady().then(() => {
+    writeStartupLog("App ready.");
     Menu.setApplicationMenu(buildApplicationMenu());
     attachRollercoinAssetRequestHeaders(session.defaultSession);
     attachRollercoinAssetRequestHeaders(session.fromPartition(ROLLERCOIN_PARTITION));
@@ -5492,8 +5595,29 @@ if (hasSingleInstanceLock) {
 }
 
 app.on("window-all-closed", () => {
+  writeStartupLog("window-all-closed fired.", { platform: process.platform });
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  writeStartupLog("before-quit fired.");
+});
+
+process.on("uncaughtException", (error) => {
+  writeStartupLog("uncaughtException", {
+    message: error?.message || String(error),
+    stack: error?.stack || null,
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  writeStartupLog("unhandledRejection", {
+    message:
+      reason instanceof Error
+        ? reason.stack || reason.message
+        : String(reason),
+  });
 });
 
