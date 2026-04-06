@@ -221,8 +221,8 @@ function normalizeMinerDisplayLevel(value) {
   const parsed = parseNumber(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
 
-  const level = Math.floor(parsed);
-  return level === 1 ? 2 : level;
+  // RollerCoin APIs expose miner upgrade levels as internal indexes: 1 => L2, 2 => L3, etc.
+  return Math.floor(parsed) + 1;
 }
 
 function buildMinerLevelBadgeUrl(level) {
@@ -1817,12 +1817,7 @@ function extractMinerLevel(rawItem) {
   ]);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
 
-  const level = Math.floor(parsed);
-  if (rawItem?.__roomConfigRaw === true) {
-    return level + 1;
-  }
-
-  return normalizeMinerDisplayLevel(level);
+  return normalizeMinerDisplayLevel(parsed);
 }
 
 function extractMinerWidth(rawItem) {
@@ -2141,7 +2136,7 @@ function normalizeMarketMiners(rawItems) {
     const miner = parseMinerFromRaw(rawItem, index);
     if (!miner) return;
 
-    const dedupeKey = `${miner.id}:${miner.price}:${miner.power}:${miner.bonusPercent}`;
+    const dedupeKey = `${miner.id}:${miner.level || 0}:${miner.price}:${miner.power}:${miner.bonusPercent}`;
     if (!map.has(dedupeKey)) {
       map.set(dedupeKey, miner);
     }
@@ -2202,7 +2197,8 @@ function normalizeCachedMiner(rawItem, index) {
   const widthRaw = parseNumber(rawItem.width);
   const width = Number.isFinite(widthRaw) && widthRaw > 0 ? Math.floor(widthRaw) : extractMinerWidth(rawItem);
   const levelBadgeUrl =
-    normalizeImageUrl(rawItem.levelBadgeUrl || rawItem.level_badge_url) || buildMinerLevelBadgeUrl(level);
+    buildMinerLevelBadgeUrl(level) ||
+    normalizeImageUrl(rawItem.levelBadgeUrl || rawItem.level_badge_url);
 
   return {
     id: String(idCandidate),
@@ -2229,7 +2225,7 @@ function normalizeCachedMarketMiners(rawItems) {
     const miner = normalizeCachedMiner(rawItem, index);
     if (!miner) return;
 
-    const dedupeKey = `${miner.id}:${miner.price}:${miner.power}:${miner.bonusPercent}`;
+    const dedupeKey = `${miner.id}:${miner.level || 0}:${miner.price}:${miner.power}:${miner.bonusPercent}`;
     if (!map.has(dedupeKey)) {
       map.set(dedupeKey, miner);
     }
@@ -2785,10 +2781,11 @@ function getMarketSortMode() {
 
 function getMarketMinerOfferKey(miner) {
   const id = String(miner?.id || "");
+  const level = Number.isFinite(Number(miner?.level)) ? Math.floor(Number(miner.level)) : 0;
   const price = Number(miner?.price) || 0;
   const power = Number(miner?.power) || 0;
   const bonusPercent = Number(miner?.bonusPercent) || 0;
-  return `${id}:${price}:${power}:${bonusPercent}`;
+  return `${id}:${level}:${price}:${power}:${bonusPercent}`;
 }
 
 function cloneMinerForRecommendation(miner) {
