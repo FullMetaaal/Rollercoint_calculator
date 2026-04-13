@@ -8,476 +8,567 @@
   </head>
   <body>
     <main class="container">
-      <section class="hero">
-        <h1>Miner Selection Calculator</h1>
-        <p class="hero-subtitle">
-          Find the most profitable miner based on power, bonus, and price.
-        </p>
-      </section>
+      <section class="workspace-shell">
+        <header class="workspace-header">
+          <div class="workspace-brand">
+            <div class="brand-mark" aria-hidden="true">RC</div>
+            <div class="brand-copy">
+              <span class="brand-label">RollerCoin Calculator</span>
+              <span class="brand-subtitle">Production-style market and comparison console</span>
+            </div>
+          </div>
 
-      <section class="stats-grid">
-        <article class="stat-card">
-          <div class="stat-label">Current Total Power</div>
-          <div class="stat-value" id="currentTotalPowerStat">-</div>
-        </article>
-        <article class="stat-card">
-          <div class="stat-label">Bonus Power</div>
-          <div class="stat-value" id="currentBonusPowerStat">-</div>
-        </article>
-      </section>
+          <div class="workspace-header-side">
+            <nav class="workspace-nav" aria-label="Sections">
+              <button
+                type="button"
+                class="workspace-nav-link is-active"
+                data-nav-target="currentSystemSection"
+                data-nav-key="currentSystem"
+              >
+                Current System
+              </button>
+              <button
+                type="button"
+                class="workspace-nav-link"
+                data-nav-target="marketTabPanel"
+                data-nav-key="market"
+                data-nav-tab-group="primary"
+                data-nav-tab-panel="marketTabPanel"
+              >
+                Market Scanner
+              </button>
+              <button
+                type="button"
+                class="workspace-nav-link"
+                data-nav-target="candidatesTabPanel"
+                data-nav-key="comparison"
+                data-nav-tab-group="primary"
+                data-nav-tab-panel="candidatesTabPanel"
+              >
+                Comparison
+              </button>
+            </nav>
+            <div class="workspace-header-actions">
+              <button id="checkAppUpdatesBtn" type="button" class="ghost">Check for app updates</button>
+            </div>
+          </div>
+        </header>
 
-      <section class="card">
-        <h2>Current System</h2>
-        <div class="grid-3">
-          <label>
-            Current Base Power
-            <input id="currentBasePowerValue" type="number" min="0" step="0.001" value="183.673" />
-          </label>
-          <label>
-            Unit
-            <select id="currentBasePowerUnit">
-              <option>Gh/s</option>
-              <option>Th/s</option>
-              <option selected>Ph/s</option>
-              <option>Eh/s</option>
-              <option>Zh/s</option>
-            </select>
-          </label>
-          <label>
-            Current Total Bonus (%)
-            <input id="currentBonusPercent" type="number" min="0" step="0.01" value="330.49" />
-          </label>
-        </div>
-        <div class="header-row">
-          <label>
-            Display power unit
-            <select id="displayPowerUnit">
-              <option>Gh/s</option>
-              <option>Th/s</option>
-              <option selected>Ph/s</option>
-              <option>Eh/s</option>
-              <option>Zh/s</option>
-            </select>
-          </label>
-          <div></div>
-        </div>
-        <div class="header-row">
-          <div></div>
-          <button id="refreshCurrentPowerBtn" type="button" class="ghost">Sync from RollerCoin</button>
-        </div>
-        <p id="currentSystemSyncStatus" class="muted">RollerCoin power sync is idle.</p>
-        <section class="history-panel" aria-labelledby="powerHistoryTitle">
-          <div class="header-row history-header">
+        <section class="card current-system-card" id="currentSystemSection">
+          <div class="workspace-section-heading">
             <div>
-              <h3 id="powerHistoryTitle">Power History</h3>
-              <p class="section-subtitle">Saved by date when you sync from RollerCoin or change current system values.</p>
-            </div>
-            <button id="clearPowerHistoryBtn" type="button" class="ghost">Clear history</button>
-          </div>
-          <div class="table-shell table-shell-compact history-table-shell">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Base power</th>
-                  <th>Bonus</th>
-                  <th>Total power</th>
-                  <th>Growth</th>
-                  <th>Source</th>
-                </tr>
-              </thead>
-              <tbody id="powerHistoryBody">
-                <tr>
-                  <td colspan="6" class="muted">Power history will appear here after the first saved snapshot.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="table-pagination">
-            <button id="togglePowerHistoryBtn" type="button" class="ghost" hidden>Show older entries</button>
-          </div>
-        </section>
-      </section>
-
-      <section class="app-tabs">
-        <div class="tab-list" role="tablist" aria-label="Tools">
-          <button
-            id="marketTabBtn"
-            type="button"
-            class="tab-button is-active"
-            data-tab-target="marketTabPanel"
-            data-tab-group="primary"
-            data-tab-storage-key="rollercoin.activeTab.v1"
-            role="tab"
-            aria-selected="true"
-            aria-controls="marketTabPanel"
-          >
-            Market Scanner
-          </button>
-          <button
-            id="candidatesTabBtn"
-            type="button"
-            class="tab-button"
-            data-tab-target="candidatesTabPanel"
-            data-tab-group="primary"
-            data-tab-storage-key="rollercoin.activeTab.v1"
-            role="tab"
-            aria-selected="false"
-            aria-controls="candidatesTabPanel"
-          >
-            Candidate Comparison
-          </button>
-        </div>
-
-        <section
-          id="marketTabPanel"
-          class="tab-panel is-active"
-          data-tab-group="primary"
-          role="tabpanel"
-          aria-labelledby="marketTabBtn"
-        >
-          <section class="card card-market" id="marketCard">
-            <div class="auth-banner" id="authBanner">
-              <div class="auth-toggle auth-checking" id="authTokenIndicator" aria-hidden="true">
-                <span class="auth-toggle-knob"></span>
-              </div>
-              <div class="auth-meta">
-                <div class="auth-title">RollerCoin Auth</div>
-                <div class="auth-subtitle" id="authTokenMessage">Checking session...</div>
-              </div>
-              <button id="authActionBtn" type="button" class="ghost">Check auth</button>
-            </div>
-
-            <div class="header-row">
-              <h2>Market Scanner (RollerCoin)</h2>
-              <div class="header-actions">
-                <button id="rollercoinLoginBtn" type="button" class="ghost">Login to RollerCoin</button>
-              </div>
-            </div>
-
-            <input id="rollercoinCookie" type="hidden" />
-
-            <div class="market-top-stack">
-              <p class="inline-hint">
-                RollerCoin session and current room are detected automatically after login.
+              <p class="panel-eyebrow">Baseline Setup</p>
+              <h2>Current System</h2>
+              <p class="section-subtitle">
+                Tune your current mining setup first so market upgrades and manual comparisons use the same baseline.
               </p>
-
-              <div class="grid-3">
-                <label>
-                  Replace by width
-                  <select id="marketRoomWidthMode">
-                    <option value="any" selected>Any width</option>
-                    <option value="1">Small (1)</option>
-                    <option value="2">Large (2)</option>
-                  </select>
-                </label>
-                <label>
-                  Room miners
-                  <button id="loadRoomMinersBtn" type="button" class="ghost">Load room miners</button>
-                </label>
-              </div>
-
-              <div class="grid-3">
-                <label>
-                  Recommendation mode
-                  <select id="marketRecommendationMode">
-                    <option value="single" selected>Single purchase</option>
-                    <option value="budget">Budget combinations</option>
-                  </select>
-                </label>
-                <label>
-                  Replacement behavior
-                  <select id="marketReplacementStrategy">
-                    <option value="off" selected>Off</option>
-                    <option value="strict">Strict same width</option>
-                    <option value="flex">Flexible slots</option>
-                  </select>
-                </label>
-              </div>
-
-              <p class="inline-hint">
-                Flexible slots: one width 2 miner can be replaced by two width 1 miners.
-              </p>
-
-              <div class="grid-3">
-                <label>
-                  Budget (RLT)
-                  <input id="marketBudget" type="number" min="0" step="0.01" placeholder="e.g. 1000" />
-                </label>
-                <label>
-                  Max price per miner (RLT)
-                  <input id="marketMaxMinerPrice" type="number" min="0" step="0.01" placeholder="optional" />
-                </label>
-                <label>
-                  Top results
-                  <input id="marketTopN" type="number" min="1" step="1" placeholder="empty = all" />
-                </label>
-              </div>
-
-              <div class="actions market-actions">
-                <button id="loadMarketMinersBtn" type="button" class="ghost">Load miners from market</button>
-                <button id="findBestMarketBtn" type="button" class="primary">Find best options</button>
-              </div>
             </div>
-
-            <div class="status-stack">
-              <p id="marketStatus" class="muted status-line">Login is required to access market API.</p>
-              <p id="marketSummary" class="muted status-line"></p>
-              <p id="roomMinersStatus" class="muted status-line">Room miners are not loaded.</p>
+            <div class="card-actions">
+              <button id="refreshCurrentPowerBtn" type="button" class="ghost">Sync from RollerCoin</button>
             </div>
+          </div>
 
-            <div class="market-subtabs">
-              <div class="tab-list tab-list-compact" role="tablist" aria-label="Market views">
-                <button
-                  id="marketUpgradesTabBtn"
-                  type="button"
-                  class="tab-button is-active"
-                  data-tab-target="marketUpgradesPanel"
-                  data-tab-group="marketViews"
-                  data-tab-storage-key="rollercoin.marketViewTab.v1"
-                  role="tab"
-                  aria-selected="true"
-                  aria-controls="marketUpgradesPanel"
-                >
-                  Upgrades
-                </button>
-                <button
-                  id="marketRoomMinersTabBtn"
-                  type="button"
-                  class="tab-button"
-                  data-tab-target="marketRoomMinersPanel"
-                  data-tab-group="marketViews"
-                  data-tab-storage-key="rollercoin.marketViewTab.v1"
-                  role="tab"
-                  aria-selected="false"
-                  aria-controls="marketRoomMinersPanel"
-                >
-                  Room Miners
-                </button>
-                <button
-                  id="marketResultsTabBtn"
-                  type="button"
-                  class="tab-button"
-                  data-tab-target="marketResultsPanel"
-                  data-tab-group="marketViews"
-                  data-tab-storage-key="rollercoin.marketViewTab.v1"
-                  role="tab"
-                  aria-selected="false"
-                  aria-controls="marketResultsPanel"
-                >
-                  Market Results
-                </button>
-                <button
-                  id="marketLogsTabBtn"
-                  type="button"
-                  class="tab-button"
-                  data-tab-target="marketLogsPanel"
-                  data-tab-group="marketViews"
-                  data-tab-storage-key="rollercoin.marketViewTab.v1"
-                  role="tab"
-                  aria-selected="false"
-                  aria-controls="marketLogsPanel"
-                >
-                  Load Logs
-                </button>
+          <div class="chip-row" aria-hidden="true">
+            <span class="chip chip-active">Live baseline</span>
+            <span class="chip">Saved snapshots</span>
+            <span class="chip">Editable inputs</span>
+          </div>
+
+          <div class="calculator-layout">
+            <div class="system-form">
+              <div class="grid-3 section-frame">
+                <label>
+                  Current Base Power
+                  <input id="currentBasePowerValue" type="number" min="0" step="0.001" value="183.673" />
+                </label>
+                <label>
+                  Unit
+                  <select id="currentBasePowerUnit">
+                    <option>Gh/s</option>
+                    <option>Th/s</option>
+                    <option selected>Ph/s</option>
+                    <option>Eh/s</option>
+                    <option>Zh/s</option>
+                  </select>
+                </label>
+                <label>
+                  Current Total Bonus (%)
+                  <input id="currentBonusPercent" type="number" min="0" step="0.01" value="330.49" />
+                </label>
               </div>
 
-              <section
-                id="marketUpgradesPanel"
-                class="tab-panel is-active market-subpanel"
-                data-tab-group="marketViews"
-                role="tabpanel"
-                aria-labelledby="marketUpgradesTabBtn"
-              >
-                <div id="roomReplacementSuggestions" class="room-replacement-suggestions muted">
-                  Replacement suggestions will appear here after finding market options.
-                </div>
-              </section>
+              <div class="header-row utility-row">
+                <label class="utility-label">
+                  Display power unit
+                  <select id="displayPowerUnit">
+                    <option>Gh/s</option>
+                    <option>Th/s</option>
+                    <option selected>Ph/s</option>
+                    <option>Eh/s</option>
+                    <option>Zh/s</option>
+                  </select>
+                </label>
+              </div>
 
-              <section
-                id="marketRoomMinersPanel"
-                class="tab-panel market-subpanel"
-                data-tab-group="marketViews"
-                role="tabpanel"
-                aria-labelledby="marketRoomMinersTabBtn"
-                hidden
-              >
-                <div class="market-sort-row">
-                  <label>
-                    Search room miners
-                    <input id="roomMinersSearch" type="text" placeholder="name, L2, width 2..." />
-                  </label>
-                  <label>
-                    Sort room miners by
-                    <select id="roomMinersSortMode">
-                      <option value="powerDesc" selected>Power (high to low)</option>
-                      <option value="bonusDesc">Bonus (high to low)</option>
-                      <option value="widthAsc">Width (small to large)</option>
-                      <option value="nameAsc">Name (A-Z)</option>
-                    </select>
-                  </label>
-                  <span id="roomMinersCountInfo" class="muted"></span>
-                </div>
-                <div class="table-shell">
-                  <table id="roomMinersTable" class="candidates-result-table">
-                    <thead>
-                      <tr>
-                        <th>#</th>
-                        <th>Room miner</th>
-                        <th id="roomMinersPowerHeader">Power (Ph/s)</th>
-                        <th>Bonus (%)</th>
-                        <th>Width</th>
-                      </tr>
-                    </thead>
-                    <tbody id="roomMinersBody">
-                      <tr>
-                        <td colspan="5" class="muted">Room miners will appear here after loading the current room.</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div class="table-pagination">
-                  <button id="showMoreRoomMinersBtn" type="button" class="ghost" hidden>Show 25 more</button>
-                </div>
-              </section>
+              <p id="currentSystemSyncStatus" class="muted status-line">RollerCoin power sync is idle.</p>
 
-              <section
-                id="marketResultsPanel"
-                class="tab-panel market-subpanel"
-                data-tab-group="marketViews"
-                role="tabpanel"
-                aria-labelledby="marketResultsTabBtn"
-                hidden
-              >
-                <div class="market-sort-row">
-                  <label>
-                    Sort market results by
-                    <select id="marketSortMode">
-                      <option value="gainPerPrice" selected>Gain / RLT</option>
-                      <option id="marketSortGainPowerOption" value="gainPower">Gain (Ph/s)</option>
-                    </select>
-                  </label>
-                  <span id="marketResultsCountInfo" class="muted"></span>
-                </div>
-                <div class="table-shell table-shell-large">
-                  <table id="marketResultsTable" class="candidates-result-table">
-                    <thead>
-                      <tr>
-                        <th>#</th>
-                        <th>Miner</th>
-                        <th>Price</th>
-                        <th id="marketResultsPowerHeader">Power (Ph/s)</th>
-                        <th>Bonus (%)</th>
-                        <th>Width</th>
-                        <th id="marketResultsGainHeader">Gain (Ph/s)</th>
-                        <th id="marketResultsGainPerPriceHeader">Gain / RLT (Ph/s)</th>
-                      </tr>
-                    </thead>
-                    <tbody id="marketResultsBody">
-                      <tr>
-                        <td colspan="8" class="muted">Best market candidates will appear here after loading.</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div class="table-pagination">
-                  <button id="showMoreMarketResultsBtn" type="button" class="ghost" hidden>Show 25 more</button>
-                </div>
-              </section>
-
-              <section
-                id="marketLogsPanel"
-                class="tab-panel market-subpanel"
-                data-tab-group="marketViews"
-                role="tabpanel"
-                aria-labelledby="marketLogsTabBtn"
-                hidden
-              >
-                <div class="market-logs">
-                  <div class="header-row">
-                    <h3>Load Logs</h3>
-                    <button id="clearMarketLogsBtn" type="button" class="ghost">Clear logs</button>
+              <section class="history-panel" aria-labelledby="powerHistoryTitle">
+                <div class="header-row history-header">
+                  <div>
+                    <h3 id="powerHistoryTitle">Power History</h3>
+                    <p class="section-subtitle">Saved by date when you sync from RollerCoin or change current system values.</p>
                   </div>
-                  <pre id="marketLogsOutput" class="market-logs-output muted">Logs will appear here after clicking "Load miners from market".</pre>
+                  <button id="clearPowerHistoryBtn" type="button" class="ghost">Clear history</button>
+                </div>
+                <div class="table-shell table-shell-compact history-table-shell">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Base power</th>
+                        <th>Bonus</th>
+                        <th>Total power</th>
+                        <th>Growth</th>
+                        <th>Source</th>
+                      </tr>
+                    </thead>
+                    <tbody id="powerHistoryBody">
+                      <tr>
+                        <td colspan="6" class="muted">Power history will appear here after the first saved snapshot.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="table-pagination">
+                  <button id="togglePowerHistoryBtn" type="button" class="ghost" hidden>Show older entries</button>
                 </div>
               </section>
             </div>
-          </section>
+
+            <aside class="summary-column">
+              <article class="insight-card insight-card-metric insight-card-main">
+                <span class="insight-label">Current Total Power</span>
+                <div class="insight-value" id="currentTotalPowerStat">-</div>
+              </article>
+
+              <article class="insight-card insight-card-metric">
+                <span class="insight-label">Bonus Power</span>
+                <div class="insight-value" id="currentBonusPowerStat">-</div>
+              </article>
+
+              <article class="insight-card insight-card-note">
+                <span class="insight-label">Design Notes</span>
+                <p class="insight-copy">
+                  The visual direction mirrors the article: strong blue canvas, generous whitespace, rounded white panels, and compact pill navigation.
+                </p>
+              </article>
+            </aside>
+          </div>
         </section>
 
-        <section
-          id="candidatesTabPanel"
-          class="tab-panel"
-          data-tab-group="primary"
-          role="tabpanel"
-          aria-labelledby="candidatesTabBtn"
-          hidden
-        >
-          <section class="card">
-            <h2>Replaced Miner (Optional)</h2>
-            <p class="inline-hint">
-              These fields are only needed for manual comparison when you are replacing a specific miner.
-            </p>
-            <div class="grid-3">
-              <label>
-                Old Miner Power
-                <input id="oldMinerPowerValue" type="number" min="0" step="0.001" />
-              </label>
-              <label>
-                Unit
-                <select id="oldMinerPowerUnit">
-                  <option>Gh/s</option>
-                  <option>Th/s</option>
-                  <option selected>Ph/s</option>
-                  <option>Eh/s</option>
-                  <option>Zh/s</option>
-                </select>
-              </label>
-              <label>
-                Old Miner Bonus (%)
-                <input id="oldMinerBonusPercent" type="number" min="0" step="0.01" />
-              </label>
+        <section class="app-tabs">
+          <div class="workspace-section-heading workspace-section-heading-tabs">
+            <div>
+              <p class="panel-eyebrow">Tools</p>
+              <h2>Calculation Workspace</h2>
             </div>
-          </section>
+            <div class="tab-list" role="tablist" aria-label="Tools">
+              <button
+                id="marketTabBtn"
+                type="button"
+                class="tab-button is-active"
+                data-tab-target="marketTabPanel"
+                data-tab-group="primary"
+                data-tab-storage-key="rollercoin.activeTab.v1"
+                role="tab"
+                aria-selected="true"
+                aria-controls="marketTabPanel"
+              >
+                Market Scanner
+              </button>
+              <button
+                id="candidatesTabBtn"
+                type="button"
+                class="tab-button"
+                data-tab-target="candidatesTabPanel"
+                data-tab-group="primary"
+                data-tab-storage-key="rollercoin.activeTab.v1"
+                role="tab"
+                aria-selected="false"
+                aria-controls="candidatesTabPanel"
+              >
+                Candidate Comparison
+              </button>
+            </div>
+          </div>
 
-          <section class="secondary-layout">
-          <section class="card">
-            <div class="header-row">
-              <div>
-                <h2>Candidates</h2>
-                <p class="section-subtitle">
-                  Compare several options manually. Currently in the list:
-                  <span id="candidateCountStat">0</span>
-                </p>
+          <section
+            id="marketTabPanel"
+            class="tab-panel is-active"
+            data-tab-group="primary"
+            role="tabpanel"
+            aria-labelledby="marketTabBtn"
+          >
+            <section class="card card-market" id="marketCard">
+              <div class="auth-banner" id="authBanner">
+                <div class="auth-toggle auth-checking" id="authTokenIndicator" aria-hidden="true">
+                  <span class="auth-toggle-knob"></span>
+                </div>
+                <div class="auth-meta">
+                  <div class="auth-title">RollerCoin Auth</div>
+                  <div class="auth-subtitle" id="authTokenMessage">Checking session...</div>
+                </div>
+                <div class="auth-actions">
+                  <button id="rollercoinLoginBtn" type="button" class="ghost">Login to RollerCoin</button>
+                  <button id="authActionBtn" type="button" class="ghost">Check auth</button>
+                </div>
               </div>
-              <button id="addCandidateBtn" type="button" class="ghost">Add Candidate</button>
-            </div>
 
-            <div class="table-shell table-shell-compact">
-            <table id="candidatesTable">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Power</th>
-                  <th>Unit</th>
-                  <th>Bonus (%)</th>
-                  <th>Price ($)</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="candidatesBody"></tbody>
-            </table>
-            </div>
+              <div class="workspace-section-heading market-heading">
+                <div>
+                  <p class="panel-eyebrow">Scanner</p>
+                  <h2>Market Scanner (RollerCoin)</h2>
+                  <p class="section-subtitle">Load live market data, inspect your room, and generate replacement suggestions.</p>
+                </div>
+              </div>
 
-            <div class="actions">
-              <button id="calculateBtn" type="button" class="primary">Calculate Best Option</button>
-            </div>
+              <input id="rollercoinCookie" type="hidden" />
+
+              <div class="market-top-stack">
+                <p class="inline-hint section-frame section-frame-copy">
+                  RollerCoin session and current room are detected automatically after login.
+                </p>
+
+                <div class="grid-3 section-frame">
+                  <label>
+                    Replace by width
+                    <select id="marketRoomWidthMode">
+                      <option value="any" selected>Any width</option>
+                      <option value="1">Small (1)</option>
+                      <option value="2">Large (2)</option>
+                    </select>
+                  </label>
+                  <label>
+                    Room miners
+                    <button id="loadRoomMinersBtn" type="button" class="ghost">Load room miners</button>
+                  </label>
+                </div>
+
+                <div class="grid-3 section-frame">
+                  <label>
+                    Recommendation mode
+                    <select id="marketRecommendationMode">
+                      <option value="single">Single purchase</option>
+                      <option value="budget" selected>Budget combinations</option>
+                    </select>
+                  </label>
+                  <label>
+                    Replacement behavior
+                    <select id="marketReplacementStrategy">
+                      <option value="off">Off</option>
+                      <option value="strict">Strict same width</option>
+                      <option value="flex" selected>Flexible slots</option>
+                    </select>
+                  </label>
+                </div>
+
+                <p class="inline-hint section-frame section-frame-copy">
+                  Flexible slots: one width 2 miner can be replaced by two width 1 miners.
+                </p>
+
+                <div class="grid-3 section-frame">
+                  <label>
+                    Budget (RLT)
+                    <input id="marketBudget" type="number" min="0" step="0.01" placeholder="e.g. 1000" />
+                  </label>
+                  <label>
+                    Max price per miner (RLT)
+                    <input id="marketMaxMinerPrice" type="number" min="0" step="0.01" placeholder="optional" />
+                  </label>
+                  <label>
+                    Top results
+                    <input id="marketTopN" type="number" min="1" step="1" placeholder="empty = all" />
+                  </label>
+                </div>
+
+                <div class="actions market-actions section-frame">
+                  <button id="loadMarketMinersBtn" type="button" class="ghost">Load miners from market</button>
+                  <button id="findBestMarketBtn" type="button" class="primary">Find best options</button>
+                </div>
+              </div>
+
+              <div class="status-stack">
+                <p id="marketStatus" class="muted status-line">Login is required to access market API.</p>
+                <p id="marketSummary" class="muted status-line"></p>
+                <p id="roomMinersStatus" class="muted status-line">Room miners are not loaded.</p>
+              </div>
+
+              <div class="market-subtabs">
+                <div class="tab-list tab-list-compact" role="tablist" aria-label="Market views">
+                  <button
+                    id="marketUpgradesTabBtn"
+                    type="button"
+                    class="tab-button is-active"
+                    data-tab-target="marketUpgradesPanel"
+                    data-tab-group="marketViews"
+                    data-tab-storage-key="rollercoin.marketViewTab.v1"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="marketUpgradesPanel"
+                  >
+                    Upgrades
+                  </button>
+                  <button
+                    id="marketRoomMinersTabBtn"
+                    type="button"
+                    class="tab-button"
+                    data-tab-target="marketRoomMinersPanel"
+                    data-tab-group="marketViews"
+                    data-tab-storage-key="rollercoin.marketViewTab.v1"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="marketRoomMinersPanel"
+                  >
+                    Room Miners
+                  </button>
+                  <button
+                    id="marketResultsTabBtn"
+                    type="button"
+                    class="tab-button"
+                    data-tab-target="marketResultsPanel"
+                    data-tab-group="marketViews"
+                    data-tab-storage-key="rollercoin.marketViewTab.v1"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="marketResultsPanel"
+                  >
+                    Market Results
+                  </button>
+                  <button
+                    id="marketLogsTabBtn"
+                    type="button"
+                    class="tab-button"
+                    data-tab-target="marketLogsPanel"
+                    data-tab-group="marketViews"
+                    data-tab-storage-key="rollercoin.marketViewTab.v1"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="marketLogsPanel"
+                  >
+                    Load Logs
+                  </button>
+                </div>
+
+                <section
+                  id="marketUpgradesPanel"
+                  class="tab-panel is-active market-subpanel"
+                  data-tab-group="marketViews"
+                  role="tabpanel"
+                  aria-labelledby="marketUpgradesTabBtn"
+                >
+                  <div id="roomReplacementSuggestions" class="room-replacement-suggestions muted">
+                    Replacement suggestions will appear here after finding market options.
+                  </div>
+                </section>
+
+                <section
+                  id="marketRoomMinersPanel"
+                  class="tab-panel market-subpanel"
+                  data-tab-group="marketViews"
+                  role="tabpanel"
+                  aria-labelledby="marketRoomMinersTabBtn"
+                  hidden
+                >
+                  <div class="market-sort-row">
+                    <label>
+                      Search room miners
+                      <input id="roomMinersSearch" type="text" placeholder="name, L2, width 2..." />
+                    </label>
+                    <label>
+                      Sort room miners by
+                      <select id="roomMinersSortMode">
+                        <option value="powerDesc" selected>Power (high to low)</option>
+                        <option value="bonusDesc">Bonus (high to low)</option>
+                        <option value="widthAsc">Width (small to large)</option>
+                        <option value="nameAsc">Name (A-Z)</option>
+                      </select>
+                    </label>
+                    <span id="roomMinersCountInfo" class="muted"></span>
+                  </div>
+                  <div class="table-shell">
+                    <table id="roomMinersTable" class="candidates-result-table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Room miner</th>
+                          <th id="roomMinersPowerHeader">Power (Ph/s)</th>
+                          <th>Bonus (%)</th>
+                          <th>Width</th>
+                        </tr>
+                      </thead>
+                      <tbody id="roomMinersBody">
+                        <tr>
+                          <td colspan="5" class="muted">Room miners will appear here after loading the current room.</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="table-pagination">
+                    <button id="showMoreRoomMinersBtn" type="button" class="ghost" hidden>Show 25 more</button>
+                  </div>
+                </section>
+
+                <section
+                  id="marketResultsPanel"
+                  class="tab-panel market-subpanel"
+                  data-tab-group="marketViews"
+                  role="tabpanel"
+                  aria-labelledby="marketResultsTabBtn"
+                  hidden
+                >
+                  <div class="market-sort-row">
+                    <label>
+                      Sort market results by
+                      <select id="marketSortMode">
+                        <option value="gainPerPrice" selected>Gain / RLT</option>
+                        <option id="marketSortGainPowerOption" value="gainPower">Gain (Ph/s)</option>
+                      </select>
+                    </label>
+                    <span id="marketResultsCountInfo" class="muted"></span>
+                  </div>
+                  <div class="table-shell table-shell-large">
+                    <table id="marketResultsTable" class="candidates-result-table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Miner</th>
+                          <th>Price</th>
+                          <th id="marketResultsPowerHeader">Power (Ph/s)</th>
+                          <th>Bonus (%)</th>
+                          <th>Width</th>
+                          <th id="marketResultsGainHeader">Gain (Ph/s)</th>
+                          <th id="marketResultsGainPerPriceHeader">Gain / RLT (Ph/s)</th>
+                        </tr>
+                      </thead>
+                      <tbody id="marketResultsBody">
+                        <tr>
+                          <td colspan="8" class="muted">Best market candidates will appear here after loading.</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="table-pagination">
+                    <button id="showMoreMarketResultsBtn" type="button" class="ghost" hidden>Show 25 more</button>
+                  </div>
+                </section>
+
+                <section
+                  id="marketLogsPanel"
+                  class="tab-panel market-subpanel"
+                  data-tab-group="marketViews"
+                  role="tabpanel"
+                  aria-labelledby="marketLogsTabBtn"
+                  hidden
+                >
+                  <div class="market-logs">
+                    <div class="header-row">
+                      <h3>Load Logs</h3>
+                      <button id="clearMarketLogsBtn" type="button" class="ghost">Clear logs</button>
+                    </div>
+                    <pre id="marketLogsOutput" class="market-logs-output muted">Logs will appear here after clicking "Load miners from market".</pre>
+                  </div>
+                </section>
+              </div>
+            </section>
           </section>
 
-          <section class="card" id="resultCard">
-            <h2>Result</h2>
-            <div id="resultContent">Add at least one candidate.</div>
-          </section>
+          <section
+            id="candidatesTabPanel"
+            class="tab-panel"
+            data-tab-group="primary"
+            role="tabpanel"
+            aria-labelledby="candidatesTabBtn"
+            hidden
+          >
+            <section class="card">
+              <div class="workspace-section-heading">
+                <div>
+                  <p class="panel-eyebrow">Replacement Baseline</p>
+                  <h2>Replaced Miner (Optional)</h2>
+                  <p class="section-subtitle">
+                    These fields are only needed for manual comparison when you are replacing a specific miner.
+                  </p>
+                </div>
+              </div>
+
+              <div class="grid-3 section-frame">
+                <label>
+                  Old Miner Power
+                  <input id="oldMinerPowerValue" type="number" min="0" step="0.001" />
+                </label>
+                <label>
+                  Unit
+                  <select id="oldMinerPowerUnit">
+                    <option>Gh/s</option>
+                    <option>Th/s</option>
+                    <option selected>Ph/s</option>
+                    <option>Eh/s</option>
+                    <option>Zh/s</option>
+                  </select>
+                </label>
+                <label>
+                  Old Miner Bonus (%)
+                  <input id="oldMinerBonusPercent" type="number" min="0" step="0.01" />
+                </label>
+              </div>
+            </section>
+
+            <section class="secondary-layout">
+              <section class="card">
+                <div class="workspace-section-heading">
+                  <div>
+                    <p class="panel-eyebrow">Manual Comparison</p>
+                    <h2>Candidates</h2>
+                    <p class="section-subtitle">
+                      Compare several options manually. Currently in the list:
+                      <span id="candidateCountStat">0</span>
+                    </p>
+                  </div>
+                  <button id="addCandidateBtn" type="button" class="ghost">Add Candidate</button>
+                </div>
+
+                <div class="table-shell table-shell-compact">
+                  <table id="candidatesTable">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Power</th>
+                        <th>Unit</th>
+                        <th>Bonus (%)</th>
+                        <th>Price ($)</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="candidatesBody"></tbody>
+                  </table>
+                </div>
+
+                <div class="actions">
+                  <button id="calculateBtn" type="button" class="primary">Calculate Best Option</button>
+                </div>
+              </section>
+
+              <section class="card result-card" id="resultCard">
+                <div class="workspace-section-heading">
+                  <div>
+                    <p class="panel-eyebrow">Output</p>
+                    <h2>Result</h2>
+                  </div>
+                </div>
+                <div id="resultContent">Add at least one candidate.</div>
+              </section>
+            </section>
           </section>
         </section>
       </section>

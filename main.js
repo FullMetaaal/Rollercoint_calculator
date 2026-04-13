@@ -477,6 +477,32 @@ function createWindow() {
   });
 }
 
+function createHiddenWorkerWindow(options = {}) {
+  const workerDefaults = {
+    show: false,
+    width: 1180,
+    height: 860,
+    autoHideMenuBar: true,
+    skipTaskbar: true,
+    focusable: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      partition: ROLLERCOIN_PARTITION,
+    },
+  };
+
+  return new BrowserWindow({
+    ...workerDefaults,
+    ...options,
+    webPreferences: {
+      ...workerDefaults.webPreferences,
+      ...(options.webPreferences || {}),
+    },
+  });
+}
+
 async function readRollercoinCookies(session) {
   const cookies = await session.cookies.get({ url: "https://rollercoin.com" });
   const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
@@ -516,7 +542,7 @@ function openRollercoinAuthWindow() {
     const authWindow = new BrowserWindow({
       width: 1100,
       height: 800,
-      parent: mainWindow || undefined,
+      show: true,
       autoHideMenuBar: true,
       title: "RollerCoin Login",
       webPreferences: {
@@ -528,6 +554,18 @@ function openRollercoinAuthWindow() {
     });
 
     authWindow.once("closed", async () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try {
+          if (mainWindow.isMinimized()) {
+            mainWindow.restore();
+          }
+          mainWindow.show();
+          mainWindow.focus();
+        } catch {
+          // Ignore focus restoration issues.
+        }
+      }
+
       try {
         const sessionInfo = await readRollercoinCookies(authSession);
         writeStartupLog("Auth window closed.", {
@@ -1322,18 +1360,10 @@ function buildAuthHeaderVariants(tokenValues = []) {
 }
 
 async function readRollercoinAuthTokenValuesFromSession(authSession) {
-  const worker = new BrowserWindow({
-    show: false,
+  const worker = createHiddenWorkerWindow({
     width: 1180,
     height: 860,
-    autoHideMenuBar: true,
     title: "RollerCoin Token Reader",
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      partition: ROLLERCOIN_PARTITION,
-    },
   });
 
   try {
@@ -1970,18 +2000,10 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
     );
   }
 
-  const worker = new BrowserWindow({
-    show: false,
+  const worker = createHiddenWorkerWindow({
     width: 1180,
     height: 860,
-    autoHideMenuBar: true,
     title: "RollerCoin Market API Worker",
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      partition: ROLLERCOIN_PARTITION,
-    },
   });
 
   try {
@@ -4382,15 +4404,7 @@ async function scanMarketplaceBuyInteractive(progress = null, options = {}) {
 
 async function captureMarketViaDebugger(endpoints, progress = null) {
   const startedAt = Date.now();
-  const worker = new BrowserWindow({
-    show: false,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      partition: ROLLERCOIN_PARTITION,
-    },
-  });
+  const worker = createHiddenWorkerWindow({});
 
   const endpointPaths = endpoints
     .map((endpoint) => {
@@ -4633,18 +4647,10 @@ async function probeRollercoinAuthStatus(preferredCookieHeader = "") {
   }
 
   const sessionInfo = await readRollercoinCookies(authSession);
-  const worker = new BrowserWindow({
-    show: false,
+  const worker = createHiddenWorkerWindow({
     width: 1180,
     height: 860,
-    autoHideMenuBar: true,
     title: "RollerCoin Auth Probe",
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      partition: ROLLERCOIN_PARTITION,
-    },
   });
 
   try {
@@ -4994,18 +5000,10 @@ async function fetchRollercoinCurrentPower(preferredCookieHeader = "") {
     }
   }
 
-  const worker = new BrowserWindow({
-    show: false,
+  const worker = createHiddenWorkerWindow({
     width: 1100,
     height: 800,
-    autoHideMenuBar: true,
     title: "RollerCoin Current Power Worker",
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      partition: ROLLERCOIN_PARTITION,
-    },
   });
 
   try {
@@ -5271,18 +5269,10 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
     }
 
     if (!resolvedProfileId) {
-      const profileWorker = new BrowserWindow({
-        show: false,
+      const profileWorker = createHiddenWorkerWindow({
         width: 1100,
         height: 800,
-        autoHideMenuBar: true,
         title: "RollerCoin Profile Worker",
-        webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true,
-          sandbox: true,
-          partition: ROLLERCOIN_PARTITION,
-        },
       });
 
       try {
@@ -5538,18 +5528,10 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
     }
   }
 
-  const worker = new BrowserWindow({
-    show: false,
+  const worker = createHiddenWorkerWindow({
     width: 1100,
     height: 800,
-    autoHideMenuBar: true,
     title: "RollerCoin Room Config Worker",
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      partition: ROLLERCOIN_PARTITION,
-    },
   });
 
   try {

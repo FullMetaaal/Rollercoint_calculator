@@ -164,6 +164,7 @@ const marketSortGainPowerOption = document.getElementById("marketSortGainPowerOp
 const marketResultsPowerHeader = document.getElementById("marketResultsPowerHeader");
 const marketResultsGainHeader = document.getElementById("marketResultsGainHeader");
 const marketResultsGainPerPriceHeader = document.getElementById("marketResultsGainPerPriceHeader");
+const workspaceNavButtons = Array.from(document.querySelectorAll(".workspace-nav-link[data-nav-target]"));
 
 let marketMinersCache = [];
 let marketSourceInfo = null;
@@ -952,11 +953,7 @@ async function checkRollercoinAuthStatus(options = {}) {
     const authResult = await ipcRenderer.invoke("rollercoin-auth-status", { cookieHeader });
 
     if (authResult?.authenticated) {
-      const details = [];
-      if (authResult.selectedAuthVariant) details.push(`auth=${authResult.selectedAuthVariant}`);
-      if (authResult.selectedQueryProfile) details.push(`query=${authResult.selectedQueryProfile}`);
-      const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
-      setAuthIndicatorState("valid", `Session is active${suffix}.`);
+      setAuthIndicatorState("valid", "Session is active.");
       if (!silent) {
         setMarketStatus("RollerCoin session is active. Market loading is available.", "success");
       }
@@ -1029,9 +1026,8 @@ async function refreshCurrentPowerFromRollercoin(options = {}) {
     applyCurrentSystemFromRollercoin(powerResult);
     const syncedBasePower = formatPowerFromPhs(parseNumber(powerResult.basePowerPhs));
     const syncedBonusPercent = formatMarketValue(parseNumber(powerResult.bonusPercent), 2);
-    const authSuffix = powerResult.selectedAuthVariant ? ` via ${powerResult.selectedAuthVariant}` : "";
     setCurrentSystemSyncStatus(
-      `Synced from RollerCoin${authSuffix}: ${syncedBasePower} base, ${syncedBonusPercent}% bonus.`,
+      `Synced from RollerCoin: ${syncedBasePower} base, ${syncedBonusPercent}% bonus.`,
       "success",
     );
 
@@ -1095,6 +1091,20 @@ function saveActiveTab(storageKey, tabId) {
   void tabId;
 }
 
+function setWorkspaceNavActive(navKey) {
+  if (!Array.isArray(workspaceNavButtons) || workspaceNavButtons.length === 0) return;
+
+  workspaceNavButtons.forEach((button) => {
+    const isActive = button.dataset.navKey === navKey;
+    button.classList.toggle("is-active", isActive);
+    if (isActive) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  });
+}
+
 function setActiveTab(groupName, targetPanelId, storageKey = "") {
   if (!groupName || !targetPanelId) return;
 
@@ -1118,6 +1128,11 @@ function setActiveTab(groupName, targetPanelId, storageKey = "") {
   });
 
   saveActiveTab(storageKey, targetPanelId);
+
+  if (groupName === "primary") {
+    if (targetPanelId === "marketTabPanel") setWorkspaceNavActive("market");
+    if (targetPanelId === "candidatesTabPanel") setWorkspaceNavActive("comparison");
+  }
 }
 
 function initializeTabs() {
@@ -1154,6 +1169,37 @@ function initializeTabs() {
       panels[0].id;
 
     setActiveTab(groupName, initialTabId, group.storageKey || "");
+  });
+}
+
+function initializeWorkspaceNavigation() {
+  if (!Array.isArray(workspaceNavButtons) || workspaceNavButtons.length === 0) return;
+
+  workspaceNavButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const navKey = button.dataset.navKey || "";
+      const targetId = button.dataset.navTarget || "";
+      const tabGroup = button.dataset.navTabGroup || "";
+      const tabPanelId = button.dataset.navTabPanel || "";
+
+      if (tabGroup && tabPanelId) {
+        setActiveTab(tabGroup, tabPanelId, tabGroup === "primary" ? ACTIVE_TAB_STORAGE_KEY : "");
+      } else if (navKey) {
+        setWorkspaceNavActive(navKey);
+      }
+
+      const scrollToTarget = () => {
+        const target = document.getElementById(targetId);
+        if (!target) return;
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+
+      if (tabGroup && tabPanelId) {
+        window.requestAnimationFrame(scrollToTarget);
+      } else {
+        scrollToTarget();
+      }
+    });
   });
 }
 
@@ -4101,7 +4147,7 @@ async function handleRollercoinLogin() {
   }
 
   setMarketControlsDisabled(true);
-  setMarketStatus("Opening RollerCoin login window. Close it after successful login.", "neutral");
+  setMarketStatus("Opening RollerCoin login window. After login, focus will return to the app automatically.", "neutral");
 
   try {
     const loginResult = await ipcRenderer.invoke("rollercoin-auth-login");
@@ -4569,11 +4615,8 @@ async function initializeRollercoinSessionState() {
       rollercoinCookieInput.value = cookieHeader;
     }
 
-    setAuthIndicatorState("checking", "Saved RollerCoin session found. Verifying...");
-    await checkRollercoinAuthStatus({ silent: true });
-    if (authStatusState === "valid") {
-      setMarketStatus("Saved RollerCoin session restored.", "success");
-    }
+    setAuthIndicatorState("checking", "Saved RollerCoin session restored. Click Check auth to verify it.");
+    setMarketStatus("Saved RollerCoin session restored. Verification is now manual to avoid extra startup windows.", "neutral");
   } catch (error) {
     setAuthIndicatorState("invalid", `Saved session check failed: ${error.message}`);
   }
@@ -4738,6 +4781,7 @@ clearTransientLocalState();
 restoreCurrentSystem();
 restoreCurrentSystemHistory();
 initializeTabs();
+initializeWorkspaceNavigation();
 updatePowerUnitLabels();
 bindMarketProgressListener();
 addCandidate();
