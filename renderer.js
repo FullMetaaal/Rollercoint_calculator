@@ -1060,8 +1060,116 @@ function getRoomMinerOwnershipKey(miner) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
-  const level = Number.isFinite(Number(miner?.level)) ? Math.floor(Number(miner.level)) : 0;
-  return `${normalizedName}::${level}`;
+  const width = Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : 0;
+  const power = roundForStorage(Number(miner?.power), 12);
+  const bonusPercent = roundForStorage(Number(miner?.bonusPercent), 6);
+
+  return [
+    normalizedName || "unknown",
+    String(width),
+    Number.isFinite(power) ? power.toFixed(12) : "nan",
+    Number.isFinite(bonusPercent) ? bonusPercent.toFixed(6) : "nan",
+  ].join("::");
+}
+
+function buildMinerOwnershipCounts(miners) {
+  const counts = new Map();
+  if (!Array.isArray(miners)) return counts;
+
+  miners.forEach((miner) => {
+    const key = getRoomMinerOwnershipKey(miner);
+    if (!key) return;
+
+    const bonusPercent = Number.isFinite(Number(miner?.bonusPercent)) ? Number(miner.bonusPercent) : 0;
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+
+    counts.set(key, {
+      count: 1,
+      bonusPercent,
+    });
+  });
+
+  return counts;
+}
+
+function getEffectiveRemovedBonusPercent(removedMiners, roomMinersSnapshot = roomMinersCache) {
+  const fallbackRemovedBonusPercent = Array.isArray(removedMiners)
+    ? removedMiners.reduce((sum, miner) => sum + (Number(miner?.bonusPercent) || 0), 0)
+    : 0;
+  if (!Array.isArray(removedMiners) || removedMiners.length === 0) return 0;
+  if (!Array.isArray(roomMinersSnapshot) || roomMinersSnapshot.length === 0) {
+    return fallbackRemovedBonusPercent;
+  }
+
+  const currentCounts = buildMinerOwnershipCounts(roomMinersSnapshot);
+  const removedCounts = buildMinerOwnershipCounts(removedMiners);
+  if (currentCounts.size === 0 || removedCounts.size === 0) {
+    return fallbackRemovedBonusPercent;
+  }
+
+  let effectiveRemovedBonusPercent = 0;
+  removedCounts.forEach((removedEntry, key) => {
+    const currentEntry = currentCounts.get(key);
+    if (!currentEntry || currentEntry.count <= 0) return;
+
+    const remainingCount = currentEntry.count - removedEntry.count;
+    if (remainingCount <= 0) {
+      effectiveRemovedBonusPercent += currentEntry.bonusPercent;
+    }
+  });
+
+  return effectiveRemovedBonusPercent;
+}
+
+function getProjectedBonusPercent({
+  currentBonusPercent,
+  purchaseMiners = [],
+  replacementMiners = [],
+  roomMinersSnapshot = roomMinersCache,
+  fallbackBoughtBonusPercent = 0,
+  fallbackRemovedBonusPercent = 0,
+}) {
+  const safeCurrentBonusPercent = Number.isFinite(Number(currentBonusPercent)) ? Number(currentBonusPercent) : 0;
+  if (!Array.isArray(roomMinersSnapshot) || roomMinersSnapshot.length === 0) {
+    return safeCurrentBonusPercent + fallbackBoughtBonusPercent - fallbackRemovedBonusPercent;
+  }
+
+  const currentCounts = buildMinerOwnershipCounts(roomMinersSnapshot);
+  if (currentCounts.size === 0) {
+    return safeCurrentBonusPercent + fallbackBoughtBonusPercent - fallbackRemovedBonusPercent;
+  }
+
+  const purchaseCounts = buildMinerOwnershipCounts(purchaseMiners);
+  const replacementCounts = buildMinerOwnershipCounts(replacementMiners);
+  const affectedKeys = new Set([
+    ...purchaseCounts.keys(),
+    ...replacementCounts.keys(),
+  ]);
+
+  let bonusDelta = 0;
+  affectedKeys.forEach((key) => {
+    const beforeCount = currentCounts.get(key)?.count || 0;
+    const removedCount = replacementCounts.get(key)?.count || 0;
+    const boughtCount = purchaseCounts.get(key)?.count || 0;
+    const afterCount = beforeCount - removedCount + boughtCount;
+    const bonusPercent =
+      currentCounts.get(key)?.bonusPercent ??
+      purchaseCounts.get(key)?.bonusPercent ??
+      replacementCounts.get(key)?.bonusPercent ??
+      0;
+
+    if (beforeCount > 0 && afterCount <= 0) {
+      bonusDelta -= bonusPercent;
+    } else if (beforeCount <= 0 && afterCount > 0) {
+      bonusDelta += bonusPercent;
+    }
+  });
+
+  return safeCurrentBonusPercent + bonusDelta;
 }
 
 function getRoomWidthMode() {
@@ -1238,7 +1346,7 @@ function buildRoomReplacementSets(strategy = "strict") {
       width: Math.floor(Number(miner.width)),
       miners: [miner],
       removedPowerThs: toThs(miner.power, "Ph/s"),
-      removedBonusPercent: miner.bonusPercent,
+      removedBonusPercent: getEffectiveRemovedBonusPercent([miner]),
       removedMask: buildRemovedMask([miner]),
       label: buildReplacementSetLabel([miner]),
     }));
@@ -1256,7 +1364,7 @@ function buildRoomReplacementSets(strategy = "strict") {
         width: 2,
         miners,
         removedPowerThs: toThs(miners[0].power, "Ph/s") + toThs(miners[1].power, "Ph/s"),
-        removedBonusPercent: miners[0].bonusPercent + miners[1].bonusPercent,
+        removedBonusPercent: getEffectiveRemovedBonusPercent(miners),
         removedMask: buildRemovedMask(miners),
         label: buildReplacementSetLabel(miners),
       });
@@ -1308,7 +1416,7 @@ async function loadRoomMinersFromRollercoin(options = {}) {
 
     const roomIdText = roomResult.roomConfigId ? ` (room ${roomResult.roomConfigId})` : " (current room)";
     setRoomMinersStatus(
-      `Loaded ${normalizedRoomMiners.length} room miners${roomIdText}. Market table excludes same name + level.`,
+      `Loaded ${normalizedRoomMiners.length} room miners${roomIdText}. Market table excludes identical miner variants.`,
       "success",
     );
     appendMarketLog(`Loaded ${normalizedRoomMiners.length} room miners${roomIdText}.`, "success");
@@ -2287,7 +2395,8 @@ function normalizeCachedMarketMiners(rawItems) {
 function normalizeRoomMiners(rawItems) {
   if (!Array.isArray(rawItems)) return [];
 
-  const map = new Map();
+  const normalizedMiners = [];
+  const seenIds = new Set();
   rawItems.forEach((rawItem, index) => {
     const miner = normalizeRoomMinerFromRaw(
       rawItem && typeof rawItem === "object" ? { ...rawItem, __roomConfigRaw: true } : rawItem,
@@ -2295,13 +2404,21 @@ function normalizeRoomMiners(rawItems) {
     );
     if (!miner) return;
 
-    const dedupeKey = `${miner.name}:${miner.level || 0}:${miner.width || 0}:${miner.power}:${miner.bonusPercent}`;
-    if (!map.has(dedupeKey)) {
-      map.set(dedupeKey, miner);
+    const baseId = String(miner.id || `room-miner-${index + 1}`);
+    let uniqueId = baseId;
+    let duplicateIndex = 2;
+    while (seenIds.has(uniqueId)) {
+      uniqueId = `${baseId}#${duplicateIndex}`;
+      duplicateIndex += 1;
     }
+    seenIds.add(uniqueId);
+    normalizedMiners.push({
+      ...miner,
+      id: uniqueId,
+    });
   });
 
-  return [...map.values()];
+  return normalizedMiners;
 }
 
 function logMinerPreview(miners, label = "Miner preview") {
@@ -2907,12 +3024,19 @@ function buildRecommendationEntry({
   const safeRemovedPowerThs = Number.isFinite(Number(removedPowerThs))
     ? Number(removedPowerThs)
     : normalizedReplacementMiners.reduce((sum, miner) => sum + toThs(miner.power, "Ph/s"), 0);
-  const safeRemovedBonusPercent = Number.isFinite(Number(removedBonusPercent))
+  const rawRemovedBonusPercent = Number.isFinite(Number(removedBonusPercent))
     ? Number(removedBonusPercent)
     : normalizedReplacementMiners.reduce((sum, miner) => sum + (Number(miner.bonusPercent) || 0), 0);
+  const effectiveRemovedBonusPercent = getEffectiveRemovedBonusPercent(normalizedReplacementMiners);
 
   const projectedBaseThs = currentSystem.baseThs + safeBoughtPowerThs - safeRemovedPowerThs;
-  const projectedBonusPercent = currentSystem.bonusPercent + safeBoughtBonusPercent - safeRemovedBonusPercent;
+  const projectedBonusPercent = getProjectedBonusPercent({
+    currentBonusPercent: currentSystem.bonusPercent,
+    purchaseMiners: normalizedPurchaseMiners,
+    replacementMiners: normalizedReplacementMiners,
+    fallbackBoughtBonusPercent: safeBoughtBonusPercent,
+    fallbackRemovedBonusPercent: effectiveRemovedBonusPercent,
+  });
   const projectedTotalThs = getCurrentTotal(projectedBaseThs, projectedBonusPercent);
   const gainThs = projectedTotalThs - totalCurrentThs;
   const numericPrice = Number(price);
@@ -2964,7 +3088,8 @@ function buildRecommendationEntry({
     boughtPowerThs: safeBoughtPowerThs,
     boughtBonusPercent: safeBoughtBonusPercent,
     removedPowerThs: safeRemovedPowerThs,
-    removedBonusPercent: safeRemovedBonusPercent,
+    removedBonusPercent: effectiveRemovedBonusPercent,
+    rawRemovedBonusPercent,
     removedMask,
     buyMask,
     marketMinerIds: normalizedPurchaseMiners.map((miner) => String(miner?.id || "")),
@@ -3140,7 +3265,7 @@ function buildBudgetReplacementSetMap(currentSystem, maxWidth) {
         width,
         miner,
         removedPowerThs: toThs(miner.power, "Ph/s"),
-        removedBonusPercent: Number(miner.bonusPercent) || 0,
+        removedBonusPercent: getEffectiveRemovedBonusPercent([miner]),
         removedMask: roomMinerMaskById.get(String(miner?.id || `room-miner-${index + 1}`)) || 0n,
       };
     })
@@ -3156,13 +3281,15 @@ function buildBudgetReplacementSetMap(currentSystem, maxWidth) {
       sourceBucket.forEach((state) => {
         if ((state.removedMask & roomEntry.removedMask) !== 0n) return;
 
+        const nextMiners = [...state.miners, roomEntry.miner];
+
         nextBucket.push({
           width: nextWidth,
-          miners: [...state.miners, roomEntry.miner],
+          miners: nextMiners,
           removedPowerThs: state.removedPowerThs + roomEntry.removedPowerThs,
-          removedBonusPercent: state.removedBonusPercent + roomEntry.removedBonusPercent,
+          removedBonusPercent: getEffectiveRemovedBonusPercent(nextMiners),
           removedMask: state.removedMask | roomEntry.removedMask,
-          label: buildReplacementSetLabel([...state.miners, roomEntry.miner]),
+          label: buildReplacementSetLabel(nextMiners),
         });
       });
 
@@ -3473,7 +3600,7 @@ function buildHoverReplacementSetMap(currentSystem, maxWidth) {
         width,
         miner,
         removedPowerThs: toThs(miner.power, "Ph/s"),
-        removedBonusPercent: Number(miner.bonusPercent) || 0,
+        removedBonusPercent: getEffectiveRemovedBonusPercent([miner]),
         removedMask: roomMinerMaskById.get(String(miner?.id || `room-miner-${index + 1}`)) || 0n,
       };
     })
@@ -3489,13 +3616,15 @@ function buildHoverReplacementSetMap(currentSystem, maxWidth) {
       sourceBucket.forEach((state) => {
         if ((state.removedMask & roomEntry.removedMask) !== 0n) return;
 
+        const nextMiners = [...state.miners, roomEntry.miner];
+
         nextBucket.push({
           width: nextWidth,
-          miners: [...state.miners, roomEntry.miner],
+          miners: nextMiners,
           removedPowerThs: state.removedPowerThs + roomEntry.removedPowerThs,
-          removedBonusPercent: state.removedBonusPercent + roomEntry.removedBonusPercent,
+          removedBonusPercent: getEffectiveRemovedBonusPercent(nextMiners),
           removedMask: state.removedMask | roomEntry.removedMask,
-          label: buildReplacementSetLabel([...state.miners, roomEntry.miner]),
+          label: buildReplacementSetLabel(nextMiners),
         });
       });
 
