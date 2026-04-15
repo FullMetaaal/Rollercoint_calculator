@@ -90,7 +90,9 @@ const CURRENT_SYSTEM_FIELD_ID_SET = new Set(CURRENT_SYSTEM_FIELD_IDS);
 
 const ROLLERCOIN_MARKET_STORAGE_KEY = "rollercoin.marketSettings.v1";
 const ROLLERCOIN_MARKET_MINERS_CACHE_STORAGE_KEY = "rollercoin.marketMinersCache.v1";
-const ROLLERCOIN_MARKET_MINERS_CACHE_VERSION = 2;
+const ROLLERCOIN_MARKET_MINERS_CACHE_VERSION = 3;
+const ROLLERCOIN_MARKET_MINERS_CACHE_FILENAME = "market-miners-cache.json";
+const ROLLERCOIN_MARKET_MINERS_CACHE_FALLBACK_DIR = path.join(os.homedir(), ".roller-coin-calculator");
 const MARKET_FIELD_IDS = [
   "displayPowerUnit",
   "marketRoomWidthMode",
@@ -115,6 +117,9 @@ const MARKET_API_CANDIDATE_ENDPOINTS = [
 const MARKET_DIRECT_PAGE_LIMIT = 100;
 const MARKET_DIRECT_MAX_PAGES = 250;
 const MARKET_DIRECT_PAGE_BATCH_SIZE = 2;
+const MARKET_QUICK_REFRESH_PAGE_LIMIT = 8;
+const MARKET_FULL_REFRESH_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const MARKET_VARIANT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 const candidatesBody = document.getElementById("candidatesBody");
 const addCandidateBtn = document.getElementById("addCandidateBtn");
@@ -167,6 +172,7 @@ const marketResultsGainPerPriceHeader = document.getElementById("marketResultsGa
 const workspaceNavButtons = Array.from(document.querySelectorAll(".workspace-nav-link[data-nav-target]"));
 
 let marketMinersCache = [];
+let marketMinerCatalogCache = [];
 let marketSourceInfo = null;
 let roomMinersCache = [];
 let roomMinersSourceInfo = null;
@@ -176,6 +182,7 @@ let marketHeartbeatStartedAt = 0;
 let marketProgressListenerBound = false;
 let marketLogLines = [];
 let marketLogText = "";
+let marketLogFlushScheduled = false;
 let authStatusState = "checking";
 let authStatusCheckInFlight = false;
 let appUpdateCheckInFlight = false;
@@ -190,6 +197,10 @@ let marketHoverTooltip = null;
 let marketHoverTooltipContent = new Map();
 let currentSystemHistory = [];
 let isPowerHistoryExpanded = false;
+let marketCacheFilePath = path.join(
+  ROLLERCOIN_MARKET_MINERS_CACHE_FALLBACK_DIR,
+  ROLLERCOIN_MARKET_MINERS_CACHE_FILENAME,
+);
 
 const MARKET_LOG_MAX_LINES = 250;
 const TABLE_RENDER_BATCH_SIZE = 25;
@@ -200,6 +211,9 @@ const BUDGET_COMBINATION_OPTION_LIMIT = 320;
 const BUDGET_COMBINATION_STATE_LIMIT = 220;
 const BUDGET_COMBINATION_RESULT_LIMIT = 160;
 const BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH = 5;
+const BUDGET_RECOMMENDATION_MARKET_CANDIDATE_LIMIT = 600;
+const SINGLE_RECOMMENDATION_REPLACEMENT_SET_LIMIT = 48;
+const SINGLE_RECOMMENDATION_FLEX_PAIR_SOURCE_LIMIT = 40;
 
 function parseNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
@@ -857,6 +871,57 @@ function formatMarketDateTime(timestamp) {
   return new Date(parsed).toLocaleString("en-US", { hour12: false });
 }
 
+function normalizeMarketTimestamp(value, fallback = null) {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+  return fallback;
+}
+
+function getMarketCacheFilePath() {
+  const fallbackPath = path.join(
+    ROLLERCOIN_MARKET_MINERS_CACHE_FALLBACK_DIR,
+    ROLLERCOIN_MARKET_MINERS_CACHE_FILENAME,
+  );
+  const resolvedPath =
+    typeof marketCacheFilePath === "string" && marketCacheFilePath.trim()
+      ? marketCacheFilePath
+      : fallbackPath;
+
+  try {
+    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+  } catch {
+    // Ignore cache directory creation failures; callers will handle file write/read errors.
+  }
+
+  marketCacheFilePath = resolvedPath;
+  return resolvedPath;
+}
+
+async function resolveMarketCacheFilePath() {
+  const fallbackPath = getMarketCacheFilePath();
+  if (!ipcRenderer || typeof ipcRenderer.invoke !== "function") {
+    return fallbackPath;
+  }
+
+  try {
+    const response = await ipcRenderer.invoke("app-user-data-path");
+    const basePath =
+      response && response.success && typeof response.path === "string" && response.path.trim()
+        ? response.path.trim()
+        : "";
+    if (!basePath) {
+      return fallbackPath;
+    }
+
+    marketCacheFilePath = path.join(basePath, ROLLERCOIN_MARKET_MINERS_CACHE_FILENAME);
+    return getMarketCacheFilePath();
+  } catch {
+    return fallbackPath;
+  }
+}
+
 function normalizeMarketSourceInfo(rawSourceInfo, fallbackScore = 0) {
   const endpoint =
     typeof rawSourceInfo?.endpoint === "string" && rawSourceInfo.endpoint.trim()
@@ -875,21 +940,103 @@ function normalizeMarketSourceInfo(rawSourceInfo, fallbackScore = 0) {
 
   const parsedLoadedAt = Number(rawSourceInfo?.loadedAt);
   const loadedAt = Number.isFinite(parsedLoadedAt) && parsedLoadedAt > 0 ? parsedLoadedAt : Date.now();
+  const refreshMode = rawSourceInfo?.refreshMode === "quick" ? "quick" : "full";
+  const parsedMaxPages = Number(rawSourceInfo?.maxPages);
+  const maxPages =
+    Number.isFinite(parsedMaxPages) && parsedMaxPages > 0 ? Math.floor(parsedMaxPages) : MARKET_DIRECT_MAX_PAGES;
+  const fullRefreshedAt = normalizeMarketTimestamp(rawSourceInfo?.fullRefreshedAt, null);
+  const quickRefreshedAt = normalizeMarketTimestamp(rawSourceInfo?.quickRefreshedAt, null);
+  const catalogCount = Math.max(0, Math.floor(Number(rawSourceInfo?.catalogCount) || 0));
+  const activeCount = Math.max(0, Math.floor(Number(rawSourceInfo?.activeCount) || 0));
+  const cacheRestored = Boolean(rawSourceInfo?.cacheRestored);
+  const cacheFilePath =
+    typeof rawSourceInfo?.cacheFilePath === "string" && rawSourceInfo.cacheFilePath.trim()
+      ? rawSourceInfo.cacheFilePath.trim()
+      : getMarketCacheFilePath();
 
   return {
     endpoint,
     sourcePath,
     sourceScore,
     loadedAt,
+    refreshMode,
+    maxPages,
+    fullRefreshedAt,
+    quickRefreshedAt,
+    catalogCount,
+    activeCount,
+    cacheRestored,
+    cacheFilePath,
   };
 }
 
 function saveMarketMinersCache() {
-  // Persistence is intentionally disabled. Market miners stay in memory only.
+  const filePath = getMarketCacheFilePath();
+  const payload = {
+    version: ROLLERCOIN_MARKET_MINERS_CACHE_VERSION,
+    savedAt: Date.now(),
+    sourceInfo: normalizeMarketSourceInfo({
+      ...marketSourceInfo,
+      cacheRestored: false,
+      catalogCount: marketMinerCatalogCache.length,
+      activeCount: marketMinersCache.length,
+      cacheFilePath: filePath,
+    }, marketMinersCache.length),
+    catalog: Array.isArray(marketMinerCatalogCache)
+      ? marketMinerCatalogCache.map((miner) => ({ ...miner }))
+      : [],
+  };
+
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(payload), "utf8");
+    return true;
+  } catch (error) {
+    appendMarketLog(`Failed to save market cache: ${error.message}`, "warn");
+    return false;
+  }
 }
 
 function restoreMarketMinersCache() {
-  return false;
+  const filePath = getMarketCacheFilePath();
+
+  try {
+    if (!fs.existsSync(filePath)) {
+      return false;
+    }
+
+    const raw = fs.readFileSync(filePath, "utf8");
+    if (!raw.trim()) {
+      return false;
+    }
+
+    const payload = JSON.parse(raw);
+    const rawCatalog =
+      Array.isArray(payload?.catalog) ? payload.catalog : Array.isArray(payload?.miners) ? payload.miners : [];
+    const normalizedCatalog = normalizeMarketMinerCatalog(rawCatalog);
+    const activeMiners = buildActiveMarketMinersFromCatalog(normalizedCatalog);
+    if (normalizedCatalog.length === 0 || activeMiners.length === 0) {
+      return false;
+    }
+
+    marketMinerCatalogCache = normalizedCatalog;
+    marketMinersCache = activeMiners;
+    marketSourceInfo = normalizeMarketSourceInfo({
+      ...(payload?.sourceInfo || {}),
+      sourcePath: payload?.sourceInfo?.sourcePath || "disk-cache",
+      loadedAt: payload?.savedAt || payload?.sourceInfo?.loadedAt || Date.now(),
+      catalogCount: normalizedCatalog.length,
+      activeCount: activeMiners.length,
+      cacheRestored: true,
+      cacheFilePath: filePath,
+    }, activeMiners.length);
+    return true;
+  } catch (error) {
+    writeRendererLog("restoreMarketMinersCache failed", {
+      message: error?.message || String(error),
+      filePath,
+    });
+    return false;
+  }
 }
 
 function setMarketStatus(message, tone = "neutral") {
@@ -1313,6 +1460,7 @@ function initializeWorkspaceNavigation() {
 
 function clearTransientLocalState() {
   marketMinersCache = [];
+  marketMinerCatalogCache = [];
   marketSourceInfo = null;
   roomMinersCache = [];
 
@@ -1332,46 +1480,90 @@ function buildReplacementSetLabel(miners) {
     .join(" + ");
 }
 
-function buildRoomReplacementSets(strategy = "strict") {
+function normalizeReplacementSetBucket(bucket, currentSystem, limit = SINGLE_RECOMMENDATION_REPLACEMENT_SET_LIMIT) {
+  if (!Array.isArray(bucket) || bucket.length === 0) return [];
+
+  const uniqueBucket = new Map();
+  bucket.forEach((replacementSet) => {
+    if (!replacementSet) return;
+    const bucketKey = replacementSet.removedMask.toString(16);
+    const existing = uniqueBucket.get(bucketKey);
+    if (!existing || compareReplacementSetsByLoss(replacementSet, existing, currentSystem) < 0) {
+      uniqueBucket.set(bucketKey, replacementSet);
+    }
+  });
+
+  return [...uniqueBucket.values()]
+    .sort((leftSet, rightSet) => compareReplacementSetsByLoss(leftSet, rightSet, currentSystem))
+    .slice(0, limit);
+}
+
+function buildSingleRecommendationReplacementSetBuckets(currentSystem, strategy = "strict") {
+  const buckets = new Map();
+  if (!currentSystem || !Array.isArray(roomMinersCache) || roomMinersCache.length === 0) {
+    return buckets;
+  }
+
   const roomMinerMaskById = new Map(
     roomMinersCache.map((miner, index) => [String(miner?.id || `room-miner-${index + 1}`), 1n << BigInt(index)]),
   );
-  const buildRemovedMask = (miners) => miners.reduce((mask, miner) => {
-    const minerKey = String(miner?.id || "");
-    return mask | (roomMinerMaskById.get(minerKey) || 0n);
-  }, 0n);
   const singles = roomMinersCache
-    .filter((miner) => Number.isFinite(Number(miner?.width)) && Number(miner.width) > 0)
-    .map((miner) => ({
-      width: Math.floor(Number(miner.width)),
-      miners: [miner],
-      removedPowerThs: toThs(miner.power, "Ph/s"),
-      removedBonusPercent: getEffectiveRemovedBonusPercent([miner]),
-      removedMask: buildRemovedMask([miner]),
-      label: buildReplacementSetLabel([miner]),
-    }));
+    .map((miner, index) => {
+      const width = Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : null;
+      if (!Number.isFinite(width) || width <= 0) return null;
+
+      const removedMask = roomMinerMaskById.get(String(miner?.id || `room-miner-${index + 1}`)) || 0n;
+      return {
+        width,
+        miners: [miner],
+        removedPowerThs: toThs(miner.power, "Ph/s"),
+        removedBonusPercent: getEffectiveRemovedBonusPercent([miner]),
+        removedMask,
+        label: buildReplacementSetLabel([miner]),
+      };
+    })
+    .filter(Boolean);
+
+  singles.forEach((replacementSet) => {
+    const bucket = buckets.get(replacementSet.width) || [];
+    bucket.push(replacementSet);
+    buckets.set(replacementSet.width, bucket);
+  });
+
+  buckets.forEach((bucket, width) => {
+    buckets.set(width, normalizeReplacementSetBucket(bucket, currentSystem));
+  });
 
   if (strategy !== "flex") {
-    return singles;
+    return buckets;
   }
 
-  const flexibleSets = [...singles];
-  const smallMiners = roomMinersCache.filter((miner) => Math.floor(Number(miner?.width || 0)) === 1);
-  for (let leftIndex = 0; leftIndex < smallMiners.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < smallMiners.length; rightIndex += 1) {
-      const miners = [smallMiners[leftIndex], smallMiners[rightIndex]];
-      flexibleSets.push({
+  const pairSource = (buckets.get(1) || []).slice(0, SINGLE_RECOMMENDATION_FLEX_PAIR_SOURCE_LIMIT);
+  if (pairSource.length < 2) {
+    return buckets;
+  }
+
+  const widthTwoBucket = [...(buckets.get(2) || [])];
+  for (let leftIndex = 0; leftIndex < pairSource.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < pairSource.length; rightIndex += 1) {
+      const leftSet = pairSource[leftIndex];
+      const rightSet = pairSource[rightIndex];
+      if ((leftSet.removedMask & rightSet.removedMask) !== 0n) continue;
+
+      const miners = [...leftSet.miners, ...rightSet.miners];
+      widthTwoBucket.push({
         width: 2,
         miners,
-        removedPowerThs: toThs(miners[0].power, "Ph/s") + toThs(miners[1].power, "Ph/s"),
+        removedPowerThs: leftSet.removedPowerThs + rightSet.removedPowerThs,
         removedBonusPercent: getEffectiveRemovedBonusPercent(miners),
-        removedMask: buildRemovedMask(miners),
+        removedMask: leftSet.removedMask | rightSet.removedMask,
         label: buildReplacementSetLabel(miners),
       });
     }
   }
 
-  return flexibleSets;
+  buckets.set(2, normalizeReplacementSetBucket(widthTwoBucket, currentSystem));
+  return buckets;
 }
 
 async function loadRoomMinersFromRollercoin(options = {}) {
@@ -1448,6 +1640,22 @@ function formatLogTime(timestamp) {
   return date.toLocaleTimeString("en-US", { hour12: false });
 }
 
+function flushMarketLogsToView() {
+  marketLogFlushScheduled = false;
+  if (!marketLogsOutput) return;
+  marketLogText = marketLogLines.join("\n");
+  marketLogsOutput.textContent = marketLogText;
+  marketLogsOutput.scrollTop = marketLogsOutput.scrollHeight;
+}
+
+function scheduleMarketLogFlush() {
+  if (marketLogFlushScheduled) return;
+  marketLogFlushScheduled = true;
+
+  const flush = () => flushMarketLogsToView();
+  setTimeout(flush, 120);
+}
+
 function appendMarketLog(message, level = "info", timestamp = Date.now()) {
   if (!marketLogsOutput) return;
   const safeLevel = typeof level === "string" ? level.toUpperCase() : "INFO";
@@ -1456,18 +1664,15 @@ function appendMarketLog(message, level = "info", timestamp = Date.now()) {
 
   if (marketLogLines.length > MARKET_LOG_MAX_LINES) {
     marketLogLines = marketLogLines.slice(-MARKET_LOG_MAX_LINES);
-    marketLogText = marketLogLines.join("\n");
-  } else {
-    marketLogText = marketLogText ? `${marketLogText}\n${line}` : line;
   }
 
-  marketLogsOutput.textContent = marketLogText;
-  marketLogsOutput.scrollTop = marketLogsOutput.scrollHeight;
+  scheduleMarketLogFlush();
 }
 
 function clearMarketLogs() {
   marketLogLines = [];
   marketLogText = "";
+  marketLogFlushScheduled = false;
   if (marketLogsOutput) {
     marketLogsOutput.textContent = "";
   }
@@ -2097,6 +2302,17 @@ function normalizeImageUrl(value) {
   return "";
 }
 
+function isUnsuitableMinerImageUrl(url) {
+  const signature = String(url || "").toLowerCase();
+  if (!signature) return true;
+  return (
+    signature.includes("/rarity_icons/") ||
+    /\/level_\d+\.png(?:[?#]|$)/.test(signature) ||
+    signature.includes("badge") ||
+    signature.includes("frame")
+  );
+}
+
 function getImagePenalty(url) {
   const signature = String(url || "").toLowerCase();
   let penalty = 0;
@@ -2240,6 +2456,26 @@ function extractMinerImageUrl(rawItem, rootItem = null) {
   return extractMinerImageCandidates(rawItem, rootItem)[0] || "";
 }
 
+function finalizeMinerImageCandidates(candidates) {
+  const normalizedCandidates = (Array.isArray(candidates) ? candidates : [])
+    .map((entry) => normalizeImageUrl(entry))
+    .filter(Boolean);
+  if (normalizedCandidates.length === 0) {
+    return [];
+  }
+
+  const preferred = normalizedCandidates.filter((candidate) => !isUnsuitableMinerImageUrl(candidate));
+  const ranked = (preferred.length > 0 ? preferred : normalizedCandidates)
+    .map((candidate) => ({
+      candidate,
+      score: 10000 - getImagePenalty(candidate),
+    }))
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => entry.candidate);
+
+  return [...new Set(ranked)];
+}
+
 function extractMinerName(rawItem, fallbackIndex) {
   const candidates = [
     getByPath(rawItem, "product.name"),
@@ -2344,19 +2580,40 @@ function normalizeCachedMiner(rawItem, index) {
   const currency =
     typeof rawItem.currency === "string" && rawItem.currency.trim() ? rawItem.currency.trim() : "RLT";
 
-  const imageUrl = normalizeImageUrl(rawItem.imageUrl || rawItem.image_url || rawItem.img || rawItem.image);
-  const imageCandidates = [
+  const directImageUrl = normalizeImageUrl(rawItem.imageUrl || rawItem.image_url || rawItem.img || rawItem.image);
+  const looksPreNormalized =
+    typeof rawItem.variantKey === "string" ||
+    typeof rawItem.sourceOfferId === "string" ||
+    (typeof rawItem.source === "string" && rawItem.source.startsWith("marketplace-buy"));
+  const shouldRegenerateImageCandidates =
+    !looksPreNormalized ||
+    !directImageUrl ||
+    isUnsuitableMinerImageUrl(directImageUrl) ||
+    (!Array.isArray(rawItem.imageCandidates) && !Array.isArray(rawItem.image_candidates));
+  const imageCandidates = finalizeMinerImageCandidates([
+    directImageUrl,
     ...(Array.isArray(rawItem.imageCandidates) ? rawItem.imageCandidates : []),
     ...(Array.isArray(rawItem.image_candidates) ? rawItem.image_candidates : []),
-    ...extractMinerImageCandidates(rawItem),
-  ]
-    .map((entry) => normalizeImageUrl(entry))
-    .filter(Boolean);
+    ...(shouldRegenerateImageCandidates ? extractMinerImageCandidates(rawItem) : []),
+  ]);
   const level = normalizeMinerDisplayLevel(rawItem.level);
   const widthRaw = parseNumber(rawItem.width);
   const width = Number.isFinite(widthRaw) && widthRaw > 0 ? Math.floor(widthRaw) : extractMinerWidth(rawItem);
   const levelBadgeUrl =
     normalizeImageUrl(rawItem.levelBadgeUrl || rawItem.level_badge_url) || buildMinerLevelBadgeUrl(level);
+  const variantKey =
+    typeof rawItem.variantKey === "string" && rawItem.variantKey.trim() ? rawItem.variantKey.trim() : "";
+  const firstSeenAt = normalizeMarketTimestamp(rawItem.firstSeenAt, null);
+  const lastSeenAt = normalizeMarketTimestamp(rawItem.lastSeenAt, null);
+  const lastQuickSeenAt = normalizeMarketTimestamp(rawItem.lastQuickSeenAt, null);
+  const lastFullSeenAt = normalizeMarketTimestamp(rawItem.lastFullSeenAt, null);
+  const lastPriceRefreshAt = normalizeMarketTimestamp(rawItem.lastPriceRefreshAt, null);
+  const bestPriceSeenAt = normalizeMarketTimestamp(rawItem.bestPriceSeenAt, null);
+  const sourceOfferId =
+    typeof rawItem.sourceOfferId === "string" && rawItem.sourceOfferId.trim()
+      ? rawItem.sourceOfferId.trim()
+      : String(idCandidate);
+  const isActive = rawItem.isActive !== false;
 
   return {
     id: String(idCandidate),
@@ -2368,10 +2625,19 @@ function normalizeCachedMiner(rawItem, index) {
     effectivePower,
     price,
     currency,
-    imageUrl: imageUrl || imageCandidates[0] || "",
+    imageUrl: (!isUnsuitableMinerImageUrl(directImageUrl) ? directImageUrl : "") || imageCandidates[0] || "",
     imageCandidates: [...new Set(imageCandidates)],
     levelBadgeUrl,
     efficiency,
+    variantKey,
+    isActive,
+    firstSeenAt,
+    lastSeenAt,
+    lastQuickSeenAt,
+    lastFullSeenAt,
+    lastPriceRefreshAt,
+    bestPriceSeenAt,
+    sourceOfferId,
   };
 }
 
@@ -2390,6 +2656,334 @@ function normalizeCachedMarketMiners(rawItems) {
   });
 
   return [...map.values()];
+}
+
+function buildMarketMinerVariantKey(miner) {
+  const normalizedName = String(miner?.name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  const width = Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : 0;
+  const power = roundForStorage(Number(miner?.power), 12);
+  const bonusPercent = roundForStorage(Number(miner?.bonusPercent), 6);
+
+  return [
+    normalizedName || "unknown",
+    String(width),
+    Number.isFinite(power) ? power.toFixed(12) : "nan",
+    Number.isFinite(bonusPercent) ? bonusPercent.toFixed(6) : "nan",
+  ].join("::");
+}
+
+function mergeMarketImageCandidatesFromEntries(...entries) {
+  const merged = [];
+  entries.forEach((entry) => {
+    const imageUrl = normalizeImageUrl(entry?.imageUrl || entry?.image_url || entry?.img || entry?.image);
+    if (imageUrl) {
+      merged.push(imageUrl);
+    }
+
+    const imageCandidates = Array.isArray(entry?.imageCandidates)
+      ? entry.imageCandidates
+      : Array.isArray(entry?.image_candidates)
+        ? entry.image_candidates
+        : [];
+    imageCandidates.forEach((candidate) => {
+      const normalized = normalizeImageUrl(candidate);
+      if (normalized) {
+        merged.push(normalized);
+      }
+    });
+  });
+
+  return finalizeMinerImageCandidates(merged);
+}
+
+function finalizeMarketCatalogMiner(entry, fallbackNow = Date.now()) {
+  const variantKey =
+    typeof entry?.variantKey === "string" && entry.variantKey.trim()
+      ? entry.variantKey.trim()
+      : buildMarketMinerVariantKey(entry);
+  const power = Number.isFinite(Number(entry?.power)) ? Number(entry.power) : NaN;
+  const bonusPercent = Number.isFinite(Number(entry?.bonusPercent)) ? Number(entry.bonusPercent) : 0;
+  const price = Number.isFinite(Number(entry?.price)) ? Number(entry.price) : NaN;
+  const effectivePower = Number.isFinite(power) ? power * (1 + bonusPercent / 100) : NaN;
+  const efficiency = Number.isFinite(price) && price > 0 ? effectivePower / price : NaN;
+  const imageCandidates = mergeMarketImageCandidatesFromEntries(entry);
+  const imageUrl =
+    normalizeImageUrl(entry?.imageUrl || entry?.image_url || entry?.img || entry?.image) ||
+    imageCandidates[0] ||
+    "";
+  const level = Number.isFinite(Number(entry?.level)) ? Math.floor(Number(entry.level)) : null;
+  const lastSeenAt = normalizeMarketTimestamp(entry?.lastSeenAt, fallbackNow);
+  const firstSeenAt = normalizeMarketTimestamp(entry?.firstSeenAt, lastSeenAt || fallbackNow);
+  const lastQuickSeenAt = normalizeMarketTimestamp(entry?.lastQuickSeenAt, null);
+  const lastFullSeenAt = normalizeMarketTimestamp(entry?.lastFullSeenAt, null);
+  const lastPriceRefreshAt = normalizeMarketTimestamp(entry?.lastPriceRefreshAt, lastSeenAt || fallbackNow);
+  const bestPriceSeenAt = normalizeMarketTimestamp(entry?.bestPriceSeenAt, lastPriceRefreshAt || fallbackNow);
+
+  return {
+    id: variantKey,
+    sourceOfferId:
+      typeof entry?.sourceOfferId === "string" && entry.sourceOfferId.trim()
+        ? entry.sourceOfferId.trim()
+        : String(entry?.id || variantKey),
+    variantKey,
+    name: String(entry?.name || "Marketplace miner"),
+    power,
+    bonusPercent,
+    level,
+    width: Number.isFinite(Number(entry?.width)) ? Math.floor(Number(entry.width)) : null,
+    effectivePower,
+    price,
+    currency: typeof entry?.currency === "string" && entry.currency ? entry.currency : "RLT",
+    imageUrl,
+    imageCandidates,
+    levelBadgeUrl:
+      normalizeImageUrl(entry?.levelBadgeUrl || entry?.level_badge_url) || buildMinerLevelBadgeUrl(level),
+    efficiency,
+    isActive: entry?.isActive !== false,
+    firstSeenAt,
+    lastSeenAt,
+    lastQuickSeenAt,
+    lastFullSeenAt,
+    lastPriceRefreshAt,
+    bestPriceSeenAt,
+  };
+}
+
+function selectCheapestMarketCatalogMiner(leftMiner, rightMiner) {
+  if (!leftMiner) return rightMiner;
+  if (!rightMiner) return leftMiner;
+
+  const leftPrice = Number(leftMiner?.price);
+  const rightPrice = Number(rightMiner?.price);
+  if (!Number.isFinite(leftPrice) && Number.isFinite(rightPrice)) return rightMiner;
+  if (!Number.isFinite(rightPrice) && Number.isFinite(leftPrice)) return leftMiner;
+  if (Number.isFinite(leftPrice) && Number.isFinite(rightPrice) && rightPrice < leftPrice - 1e-9) {
+    return rightMiner;
+  }
+
+  const leftHasImage = Boolean(leftMiner?.imageUrl);
+  const rightHasImage = Boolean(rightMiner?.imageUrl);
+  if (!leftHasImage && rightHasImage) return rightMiner;
+
+  return leftMiner;
+}
+
+function coalesceStoredMarketCatalogEntries(existingEntry, candidateEntry) {
+  if (!existingEntry) return candidateEntry;
+
+  const preferredEntry = selectCheapestMarketCatalogMiner(existingEntry, candidateEntry);
+  const fallbackEntry = preferredEntry === existingEntry ? candidateEntry : existingEntry;
+  return finalizeMarketCatalogMiner({
+    ...fallbackEntry,
+    ...preferredEntry,
+    id: preferredEntry.variantKey,
+    variantKey: preferredEntry.variantKey,
+    sourceOfferId: preferredEntry.sourceOfferId || fallbackEntry.sourceOfferId || preferredEntry.variantKey,
+    imageUrl: preferredEntry.imageUrl || fallbackEntry.imageUrl || "",
+    imageCandidates: mergeMarketImageCandidatesFromEntries(existingEntry, candidateEntry),
+    levelBadgeUrl: preferredEntry.levelBadgeUrl || fallbackEntry.levelBadgeUrl || "",
+    firstSeenAt: Math.min(
+      existingEntry.firstSeenAt || candidateEntry.firstSeenAt || Date.now(),
+      candidateEntry.firstSeenAt || existingEntry.firstSeenAt || Date.now(),
+    ),
+    lastSeenAt: Math.max(existingEntry.lastSeenAt || 0, candidateEntry.lastSeenAt || 0) || Date.now(),
+    lastQuickSeenAt: Math.max(existingEntry.lastQuickSeenAt || 0, candidateEntry.lastQuickSeenAt || 0) || null,
+    lastFullSeenAt: Math.max(existingEntry.lastFullSeenAt || 0, candidateEntry.lastFullSeenAt || 0) || null,
+    lastPriceRefreshAt:
+      Math.max(existingEntry.lastPriceRefreshAt || 0, candidateEntry.lastPriceRefreshAt || 0) || Date.now(),
+    bestPriceSeenAt:
+      preferredEntry.bestPriceSeenAt ||
+      fallbackEntry.bestPriceSeenAt ||
+      candidateEntry.bestPriceSeenAt ||
+      existingEntry.bestPriceSeenAt ||
+      Date.now(),
+    isActive: existingEntry.isActive !== false || candidateEntry.isActive !== false,
+  });
+}
+
+function normalizeMarketMinerCatalog(entries) {
+  if (!Array.isArray(entries)) return [];
+
+  const catalogMap = new Map();
+  entries.forEach((entry, index) => {
+    const normalized = normalizeCachedMiner(entry, index);
+    if (!normalized) return;
+
+    const finalized = finalizeMarketCatalogMiner({
+      ...normalized,
+      variantKey: buildMarketMinerVariantKey(normalized),
+      sourceOfferId: normalized.sourceOfferId || normalized.id,
+    });
+    if (!finalized.variantKey) return;
+
+    const existing = catalogMap.get(finalized.variantKey);
+    catalogMap.set(
+      finalized.variantKey,
+      existing ? coalesceStoredMarketCatalogEntries(existing, finalized) : finalized,
+    );
+  });
+
+  return [...catalogMap.values()].sort((leftMiner, rightMiner) => {
+    const leftPrice = Number(leftMiner?.price);
+    const rightPrice = Number(rightMiner?.price);
+    if (Number.isFinite(leftPrice) && Number.isFinite(rightPrice) && leftPrice !== rightPrice) {
+      return leftPrice - rightPrice;
+    }
+
+    return String(leftMiner?.name || "").localeCompare(String(rightMiner?.name || ""), "en", {
+      sensitivity: "base",
+    });
+  });
+}
+
+function aggregateMarketMinersByVariant(miners, fallbackNow = Date.now()) {
+  const aggregated = new Map();
+  if (!Array.isArray(miners)) return aggregated;
+
+  miners.forEach((miner, index) => {
+    const normalized = normalizeCachedMiner(miner, index);
+    if (!normalized) return;
+
+    const variantKey = buildMarketMinerVariantKey(normalized);
+    if (!variantKey) return;
+
+    const finalized = finalizeMarketCatalogMiner({
+      ...normalized,
+      id: variantKey,
+      variantKey,
+      sourceOfferId: normalized.sourceOfferId || normalized.id || variantKey,
+      firstSeenAt: normalized.firstSeenAt || fallbackNow,
+      lastSeenAt: fallbackNow,
+      lastPriceRefreshAt: fallbackNow,
+      bestPriceSeenAt: normalized.bestPriceSeenAt || fallbackNow,
+    }, fallbackNow);
+
+    const existing = aggregated.get(variantKey);
+    aggregated.set(
+      variantKey,
+      existing ? coalesceStoredMarketCatalogEntries(existing, finalized) : finalized,
+    );
+  });
+
+  return aggregated;
+}
+
+function mergeMarketMinerCatalog(existingCatalog, scannedMiners, options = {}) {
+  const mode = options?.mode === "quick" ? "quick" : "full";
+  const now = normalizeMarketTimestamp(options?.now, Date.now()) || Date.now();
+  const scanMap = aggregateMarketMinersByVariant(scannedMiners, now);
+  const existingMap = new Map(normalizeMarketMinerCatalog(existingCatalog).map((miner) => [miner.variantKey, miner]));
+  const nextMap = mode === "full" ? new Map() : new Map(existingMap);
+
+  scanMap.forEach((scannedEntry, variantKey) => {
+    const existingEntry = existingMap.get(variantKey) || null;
+    if (!existingEntry) {
+      nextMap.set(variantKey, finalizeMarketCatalogMiner({
+        ...scannedEntry,
+        firstSeenAt: scannedEntry.firstSeenAt || now,
+        lastSeenAt: now,
+        lastQuickSeenAt: mode === "quick" ? now : null,
+        lastFullSeenAt: mode === "full" ? now : null,
+        lastPriceRefreshAt: now,
+        bestPriceSeenAt: scannedEntry.bestPriceSeenAt || now,
+      }, now));
+      return;
+    }
+
+    if (mode === "full") {
+      const priceChanged =
+        Number.isFinite(Number(scannedEntry.price)) &&
+        Number.isFinite(Number(existingEntry.price)) &&
+        Math.abs(Number(scannedEntry.price) - Number(existingEntry.price)) > 1e-9;
+      nextMap.set(variantKey, finalizeMarketCatalogMiner({
+        ...existingEntry,
+        ...scannedEntry,
+        id: variantKey,
+        variantKey,
+        sourceOfferId: scannedEntry.sourceOfferId || existingEntry.sourceOfferId || variantKey,
+        imageUrl: scannedEntry.imageUrl || existingEntry.imageUrl || "",
+        imageCandidates: mergeMarketImageCandidatesFromEntries(existingEntry, scannedEntry),
+        levelBadgeUrl: scannedEntry.levelBadgeUrl || existingEntry.levelBadgeUrl || "",
+        firstSeenAt: existingEntry.firstSeenAt || now,
+        lastSeenAt: now,
+        lastQuickSeenAt: existingEntry.lastQuickSeenAt,
+        lastFullSeenAt: now,
+        lastPriceRefreshAt: now,
+        bestPriceSeenAt: priceChanged ? now : existingEntry.bestPriceSeenAt || now,
+      }, now));
+      return;
+    }
+
+    const existingPrice = Number(existingEntry.price);
+    const scannedPrice = Number(scannedEntry.price);
+    const shouldReplacePrice =
+      Number.isFinite(scannedPrice) &&
+      (!Number.isFinite(existingPrice) || scannedPrice < existingPrice - 1e-9);
+    const preferredEntry = shouldReplacePrice ? scannedEntry : existingEntry;
+    nextMap.set(variantKey, finalizeMarketCatalogMiner({
+      ...existingEntry,
+      ...preferredEntry,
+      id: variantKey,
+      variantKey,
+      sourceOfferId: preferredEntry.sourceOfferId || existingEntry.sourceOfferId || variantKey,
+      imageUrl: preferredEntry.imageUrl || existingEntry.imageUrl || "",
+      imageCandidates: mergeMarketImageCandidatesFromEntries(existingEntry, scannedEntry),
+      levelBadgeUrl: preferredEntry.levelBadgeUrl || existingEntry.levelBadgeUrl || "",
+      firstSeenAt: existingEntry.firstSeenAt || now,
+      lastSeenAt: now,
+      lastQuickSeenAt: now,
+      lastFullSeenAt: existingEntry.lastFullSeenAt,
+      lastPriceRefreshAt: now,
+      bestPriceSeenAt: shouldReplacePrice ? now : existingEntry.bestPriceSeenAt || now,
+      price: shouldReplacePrice ? scannedEntry.price : existingEntry.price,
+    }, now));
+  });
+
+  const nextCatalog = [...nextMap.values()]
+    .filter((miner) => {
+      const lastSeenAt = normalizeMarketTimestamp(miner?.lastSeenAt, now) || now;
+      return now - lastSeenAt <= MARKET_VARIANT_RETENTION_MS;
+    })
+    .sort((leftMiner, rightMiner) => {
+      const leftPrice = Number(leftMiner?.price);
+      const rightPrice = Number(rightMiner?.price);
+      if (Number.isFinite(leftPrice) && Number.isFinite(rightPrice) && leftPrice !== rightPrice) {
+        return leftPrice - rightPrice;
+      }
+
+      return String(leftMiner?.name || "").localeCompare(String(rightMiner?.name || ""), "en", {
+        sensitivity: "base",
+      });
+    });
+  const currentSourceInfo = normalizeMarketSourceInfo({
+    ...(options?.sourceInfo || marketSourceInfo || {}),
+    loadedAt: now,
+    refreshMode: mode,
+    quickRefreshedAt:
+      mode === "quick" ? now : normalizeMarketTimestamp(options?.sourceInfo?.quickRefreshedAt, marketSourceInfo?.quickRefreshedAt),
+    fullRefreshedAt:
+      mode === "full" ? now : normalizeMarketTimestamp(options?.sourceInfo?.fullRefreshedAt, marketSourceInfo?.fullRefreshedAt),
+    catalogCount: nextCatalog.length,
+    activeCount: nextCatalog.length,
+    cacheRestored: false,
+  }, nextCatalog.length);
+
+  return {
+    catalog: nextCatalog,
+    activeMiners: buildActiveMarketMinersFromCatalog(nextCatalog),
+    sourceInfo: currentSourceInfo,
+  };
+}
+
+function buildActiveMarketMinersFromCatalog(catalog) {
+  return normalizeMarketMinerCatalog(catalog).filter((miner) =>
+    Number.isFinite(Number(miner?.price)) &&
+    Number(miner.price) > 0 &&
+    Number.isFinite(Number(miner?.power)) &&
+    Number(miner.power) > 0);
 }
 
 function normalizeRoomMiners(rawItems) {
@@ -2535,7 +3129,12 @@ function extractMarketRows(payload) {
   return [];
 }
 
-async function fetchDirectMarketMinersByCookie(cookieHeader) {
+async function fetchDirectMarketMinersByCookie(cookieHeader, options = {}) {
+  const refreshMode = options?.refreshMode === "quick" ? "quick" : "full";
+  const effectiveMaxPages =
+    Number.isFinite(Number(options?.maxPages)) && Number(options.maxPages) > 0
+      ? Math.min(MARKET_DIRECT_MAX_PAGES, Math.max(1, Math.floor(Number(options.maxPages))))
+      : MARKET_DIRECT_MAX_PAGES;
   const offersMap = new Map();
   const seenPageKeys = new Set();
   let lastError = "Unknown error while loading direct market API.";
@@ -2544,13 +3143,13 @@ async function fetchDirectMarketMinersByCookie(cookieHeader) {
   let shouldStop = false;
   for (
     let batchStartPage = 1;
-    batchStartPage <= MARKET_DIRECT_MAX_PAGES && !shouldStop;
+    batchStartPage <= effectiveMaxPages && !shouldStop;
     batchStartPage += MARKET_DIRECT_PAGE_BATCH_SIZE
   ) {
     const pages = [];
     for (
       let page = batchStartPage;
-      page < batchStartPage + MARKET_DIRECT_PAGE_BATCH_SIZE && page <= MARKET_DIRECT_MAX_PAGES;
+      page < batchStartPage + MARKET_DIRECT_PAGE_BATCH_SIZE && page <= effectiveMaxPages;
       page += 1
     ) {
       const url = buildDirectMarketSaleOrdersUrl(page);
@@ -2699,6 +3298,8 @@ async function fetchDirectMarketMinersByCookie(cookieHeader) {
   return {
     miners,
     endpoint: "https://rollercoin.com/api/marketplace/buy/sale-orders",
+    refreshMode,
+    maxPages: effectiveMaxPages,
     sourcePath: "direct-market-api-cookie-fallback",
     sourceScore: miners.length,
   };
@@ -2800,22 +3401,43 @@ function parseMarketPayload(endpoint, payload) {
   };
 }
 
-async function fetchMarketMiners(cookieHeader, requestId = null) {
+async function fetchMarketMiners(cookieHeader, requestId = null, options = {}) {
+  const refreshMode = options?.refreshMode === "quick" ? "quick" : "full";
+  const maxPages =
+    Number.isFinite(Number(options?.maxPages)) && Number(options.maxPages) > 0
+      ? Math.min(MARKET_DIRECT_MAX_PAGES, Math.max(1, Math.floor(Number(options.maxPages))))
+      : MARKET_DIRECT_MAX_PAGES;
+  const includeAttempts = options?.includeAttempts !== false;
   let lastError = "Unknown error while loading market offers.";
   let hadSuccessfulSessionResponse = false;
 
   if (ipcRenderer && typeof ipcRenderer.invoke === "function") {
     try {
-      appendMarketLog("Requesting market miners via authenticated Electron session...", "info");
+      appendMarketLog(
+        `Requesting market miners via authenticated Electron session (${refreshMode}, maxPages=${maxPages})...`,
+        "info",
+      );
       const sessionResponse = await ipcRenderer.invoke(
         "rollercoin-market-fetch",
         {
           cookieHeader,
           requestId,
+          refreshMode,
+          maxPages,
+          includeAttempts,
         },
       );
 
       if (sessionResponse?.attempts) {
+        if (
+          Number.isFinite(Number(sessionResponse.attemptCount)) &&
+          Number(sessionResponse.attemptCount) > sessionResponse.attempts.length
+        ) {
+          appendMarketLog(
+            `Main process trace trimmed for UI: showing ${sessionResponse.attempts.length} of ${sessionResponse.attemptCount} attempts.`,
+            "info",
+          );
+        }
         logAttemptsSummary(sessionResponse.attempts, "Main process trace");
       }
       if (sessionResponse?.diagnostics && typeof sessionResponse.diagnostics === "object") {
@@ -2848,6 +3470,10 @@ async function fetchMarketMiners(cookieHeader, requestId = null) {
           endpoint: sessionResponse.endpoint || "https://rollercoin.com/api/marketplace/buy/sale-orders",
           sourcePath: sessionResponse.sourcePath || "direct-market-api",
           sourceScore: miners.length,
+          refreshMode: sessionResponse.refreshMode || refreshMode,
+          maxPages: sessionResponse.maxPages || maxPages,
+          partial: Boolean(sessionResponse.partial),
+          warning: sessionResponse.warning || "",
         };
       }
 
@@ -2909,7 +3535,10 @@ async function fetchMarketMiners(cookieHeader, requestId = null) {
 
   appendMarketLog("Main-process loading failed. Trying direct sale-orders API via cookie fallback...", "warn");
   try {
-    return await fetchDirectMarketMinersByCookie(cookieHeader);
+    return await fetchDirectMarketMinersByCookie(cookieHeader, {
+      refreshMode,
+      maxPages,
+    });
   } catch (error) {
     throw new Error(error.message || lastError);
   }
@@ -3123,18 +3752,8 @@ function buildSingleRecommendationItems({
   currentSystem,
   totalCurrentThs,
   replacementEnabled,
-  roomReplacementSets,
-  sortMode,
+  replacementSetBuckets,
 }) {
-  const replacementSetsByWidth = new Map();
-  roomReplacementSets.forEach((replacementSet) => {
-    const widthKey = Number(replacementSet?.width);
-    if (!Number.isFinite(widthKey) || widthKey <= 0) return;
-    const bucket = replacementSetsByWidth.get(widthKey) || [];
-    bucket.push(replacementSet);
-    replacementSetsByWidth.set(widthKey, bucket);
-  });
-
   const singleItems = filteredMarketMiners
     .map((miner) => {
       const purchaseMiner = cloneMinerForRecommendation(miner);
@@ -3156,7 +3775,7 @@ function buildSingleRecommendationItems({
       }
 
       const minerWidth = Number.isFinite(Number(miner.width)) ? Math.floor(Number(miner.width)) : null;
-      const replacementPool = minerWidth ? (replacementSetsByWidth.get(minerWidth) || []) : [];
+      const replacementPool = minerWidth ? (replacementSetBuckets.get(minerWidth) || []) : [];
       let bestRecommendation = null;
 
       replacementPool.forEach((replacementSet) => {
@@ -3189,7 +3808,7 @@ function buildSingleRecommendationItems({
     })
     .filter(Boolean);
 
-  return sortRecommendationItems(singleItems, sortMode);
+  return singleItems;
 }
 
 function selectBudgetCombinationBuyPool(singleItems, budget = null) {
@@ -3369,6 +3988,62 @@ function buildBudgetModeSingleItems({
     .filter(Boolean);
 
   return sortRecommendationItems(items, sortMode);
+}
+
+function selectBudgetMarketMinerCandidates(filteredMarketMiners) {
+  if (!Array.isArray(filteredMarketMiners) || filteredMarketMiners.length <= BUDGET_RECOMMENDATION_MARKET_CANDIDATE_LIMIT) {
+    return Array.isArray(filteredMarketMiners) ? filteredMarketMiners : [];
+  }
+
+  const selected = new Map();
+  const addItems = (items, limit = BUDGET_RECOMMENDATION_MARKET_CANDIDATE_LIMIT) => {
+    items.slice(0, limit).forEach((miner) => {
+      const key = getMarketMinerOfferKey(miner);
+      if (!key || selected.has(key)) return;
+      selected.set(key, miner);
+    });
+  };
+
+  addItems(
+    [...filteredMarketMiners].sort((leftMiner, rightMiner) => {
+      const leftEfficiency = Number(leftMiner?.efficiency);
+      const rightEfficiency = Number(rightMiner?.efficiency);
+      if (Number.isFinite(rightEfficiency) && Number.isFinite(leftEfficiency) && rightEfficiency !== leftEfficiency) {
+        return rightEfficiency - leftEfficiency;
+      }
+
+      return (Number(leftMiner?.price) || 0) - (Number(rightMiner?.price) || 0);
+    }),
+    Math.ceil(BUDGET_RECOMMENDATION_MARKET_CANDIDATE_LIMIT * 0.55),
+  );
+
+  addItems(
+    [...filteredMarketMiners].sort((leftMiner, rightMiner) => {
+      const leftPrice = Number(leftMiner?.price);
+      const rightPrice = Number(rightMiner?.price);
+      if (Number.isFinite(leftPrice) && Number.isFinite(rightPrice) && leftPrice !== rightPrice) {
+        return leftPrice - rightPrice;
+      }
+
+      return (Number(rightMiner?.power) || 0) - (Number(leftMiner?.power) || 0);
+    }),
+    Math.ceil(BUDGET_RECOMMENDATION_MARKET_CANDIDATE_LIMIT * 0.35),
+  );
+
+  addItems(
+    [...filteredMarketMiners].sort((leftMiner, rightMiner) => {
+      const leftPower = Number(leftMiner?.power) || 0;
+      const rightPower = Number(rightMiner?.power) || 0;
+      if (rightPower !== leftPower) {
+        return rightPower - leftPower;
+      }
+
+      return (Number(leftMiner?.price) || 0) - (Number(rightMiner?.price) || 0);
+    }),
+    Math.ceil(BUDGET_RECOMMENDATION_MARKET_CANDIDATE_LIMIT * 0.25),
+  );
+
+  return [...selected.values()].slice(0, BUDGET_RECOMMENDATION_MARKET_CANDIDATE_LIMIT);
 }
 
 function buildBudgetCombinationOptions({
@@ -3770,7 +4445,6 @@ function buildMarketRecommendations() {
   const ownedRoomMinerKeys = new Set(roomMinersCache.map((miner) => getRoomMinerOwnershipKey(miner)));
   const overlappingOwnedCount = marketMinersCache.filter((miner) =>
     ownedRoomMinerKeys.has(getRoomMinerOwnershipKey(miner))).length;
-  const roomReplacementSets = replacementEnabled ? buildRoomReplacementSets(replacementStrategy) : [];
   const filteredMarketMiners = buildFilteredMarketMiners({
     budget,
     maxMinerPrice,
@@ -3778,19 +4452,14 @@ function buildMarketRecommendations() {
     roomMinersCacheSnapshot: roomMinersCache,
     ownedRoomMinerKeys,
   });
-  const singleItems = buildSingleRecommendationItems({
-    filteredMarketMiners,
-    currentSystem,
-    totalCurrentThs,
-    replacementEnabled,
-    roomReplacementSets,
-    sortMode,
-  });
-  let filtered = singleItems;
+  let filtered = [];
   let bundleItems = [];
+  let budgetCandidateCount = filteredMarketMiners.length;
 
   if (recommendationMode === "budget") {
-    const positivePrices = filteredMarketMiners
+    const budgetCandidateMiners = selectBudgetMarketMinerCandidates(filteredMarketMiners);
+    budgetCandidateCount = budgetCandidateMiners.length;
+    const positivePrices = budgetCandidateMiners
       .map((miner) => Number(miner?.price))
       .filter((price) => Number.isFinite(price) && price > 0);
     const minFilteredPrice = positivePrices.length > 0 ? Math.min(...positivePrices) : NaN;
@@ -3802,7 +4471,7 @@ function buildMarketRecommendations() {
           : 2;
     const maxMarketWidth = Math.max(
       0,
-      ...filteredMarketMiners.map((miner) =>
+      ...budgetCandidateMiners.map((miner) =>
         (Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : 0)),
     );
     const replacementSetsByWidth =
@@ -3810,7 +4479,7 @@ function buildMarketRecommendations() {
         ? buildBudgetReplacementSetMap(currentSystem, Math.max(maxMarketWidth * maxBudgetDepth, maxMarketWidth))
         : new Map();
     const budgetSingleItems = buildBudgetModeSingleItems({
-      filteredMarketMiners,
+      filteredMarketMiners: budgetCandidateMiners,
       currentSystem,
       totalCurrentThs,
       replacementEnabled,
@@ -3828,6 +4497,15 @@ function buildMarketRecommendations() {
     });
     filtered = sortRecommendationItems([...budgetSingleItems, ...bundleItems], sortMode);
   } else {
+    const singleReplacementSetBuckets =
+      replacementEnabled ? buildSingleRecommendationReplacementSetBuckets(currentSystem, replacementStrategy) : new Map();
+    const singleItems = buildSingleRecommendationItems({
+      filteredMarketMiners,
+      currentSystem,
+      totalCurrentThs,
+      replacementEnabled,
+      replacementSetBuckets: singleReplacementSetBuckets,
+    });
     filtered = sortRecommendationItems(singleItems, sortMode);
   }
 
@@ -3847,6 +4525,8 @@ function buildMarketRecommendations() {
     replacementRequested,
     replacementStrategy,
     recommendationMode,
+    budgetCandidateCount,
+    filteredMarketMinersCount: filteredMarketMiners.length,
     bundleCount: bundleItems.length,
     recommendedCount: upgradeItems.length,
     sortMode,
@@ -3875,11 +4555,25 @@ function updateMarketRecommendationsView(statusMessage = "Recommendations update
     marketSourceInfo && Number.isFinite(Number(marketSourceInfo.loadedAt))
       ? formatMarketDateTime(marketSourceInfo.loadedAt)
       : "unknown";
+  const refreshModeText = marketSourceInfo?.refreshMode === "quick" ? "quick" : "full";
+  const fullRefreshText =
+    marketSourceInfo && Number.isFinite(Number(marketSourceInfo.fullRefreshedAt))
+      ? formatMarketDateTime(marketSourceInfo.fullRefreshedAt)
+      : "not yet";
+  const quickRefreshText =
+    marketSourceInfo && Number.isFinite(Number(marketSourceInfo.quickRefreshedAt))
+      ? formatMarketDateTime(marketSourceInfo.quickRefreshedAt)
+      : "not yet";
   const currentBaseText = formatPowerFromPhs(recommendations.currentSystem.basePhs);
   const currentBonusText = `${formatMarketValue(recommendations.currentSystem.bonusPercent, 2)}%`;
   const sortModeText = recommendations.sortMode === "gainPower" ? "gain to system" : "gain per RLT";
   const recommendationModeText =
     recommendations.recommendationMode === "budget" ? "budget combinations" : "single purchase";
+  const budgetPoolText =
+    recommendations.recommendationMode === "budget" &&
+    recommendations.budgetCandidateCount < recommendations.filteredMarketMinersCount
+      ? `; budget scan pool: ${recommendations.budgetCandidateCount}/${recommendations.filteredMarketMinersCount}`
+      : "";
   const roomWidthText =
     recommendations.roomWidthMode === "1"
       ? "small only"
@@ -3900,9 +4594,10 @@ function updateMarketRecommendationsView(statusMessage = "Recommendations update
   if (marketSummary) {
     marketSummary.textContent =
       `Matched: ${recommendations.totalMatched}; profitable upgrades: ${recommendations.recommendedCount}; budget: ${budgetText}; max price/miner: ${maxPriceText}; ` +
-      `sort: ${sortModeText}; mode: ${recommendationModeText}; bundles: ${recommendations.bundleCount}; room miners: ${recommendations.roomMinersCount}; hidden owned: ${recommendations.overlappingOwnedCount}; width: ${roomWidthText}; replacement: ${replacementText}; ` +
+      `sort: ${sortModeText}; mode: ${recommendationModeText}${budgetPoolText}; bundles: ${recommendations.bundleCount}; room miners: ${recommendations.roomMinersCount}; hidden owned: ${recommendations.overlappingOwnedCount}; width: ${roomWidthText}; replacement: ${replacementText}; ` +
       `current base: ${currentBaseText}; current bonus: ${currentBonusText}; ` +
-      `source: ${sourceText}; path: ${sourcePathText}; updated: ${loadedAtText}.`;
+      `source: ${sourceText}; path: ${sourcePathText}; refresh: ${refreshModeText}; catalog: ${marketSourceInfo?.catalogCount || marketMinersCache.length}; ` +
+      `quick: ${quickRefreshText}; full: ${fullRefreshText}; updated: ${loadedAtText}.`;
   }
 
   setMarketStatus(statusMessage, tone);
@@ -4309,77 +5004,249 @@ async function handleRollercoinLogin() {
   }
 }
 
+function shouldRunFullMarketRefresh(sourceInfo = marketSourceInfo) {
+  const fullRefreshedAt = normalizeMarketTimestamp(sourceInfo?.fullRefreshedAt, null);
+  if (!fullRefreshedAt) {
+    return true;
+  }
+
+  return Date.now() - fullRefreshedAt >= MARKET_FULL_REFRESH_MAX_AGE_MS;
+}
+
+function buildMarketRefreshPlan() {
+  if (!Array.isArray(marketMinerCatalogCache) || marketMinerCatalogCache.length === 0) {
+    return [{
+      mode: "full",
+      maxPages: MARKET_DIRECT_MAX_PAGES,
+      includeAttempts: true,
+      label: "Initial full market sync",
+    }];
+  }
+
+  const plan = [{
+    mode: "quick",
+    maxPages: MARKET_QUICK_REFRESH_PAGE_LIMIT,
+    includeAttempts: false,
+    label: "Quick market refresh",
+  }];
+
+  if (shouldRunFullMarketRefresh()) {
+    plan.push({
+      mode: "full",
+      maxPages: MARKET_DIRECT_MAX_PAGES,
+      includeAttempts: true,
+      label: "Full market reconciliation",
+    });
+  }
+
+  return plan;
+}
+
+function applyMarketCatalogMerge(loadResult, mode = "full") {
+  const merged = mergeMarketMinerCatalog(marketMinerCatalogCache, loadResult?.miners || [], {
+    mode,
+    now: Date.now(),
+    sourceInfo: loadResult,
+  });
+
+  marketMinerCatalogCache = merged.catalog;
+  marketMinersCache = merged.activeMiners;
+  marketSourceInfo = normalizeMarketSourceInfo({
+    ...merged.sourceInfo,
+    catalogCount: merged.catalog.length,
+    activeCount: merged.activeMiners.length,
+  }, merged.activeMiners.length);
+  saveMarketMinersCache();
+  return merged;
+}
+
+function restoreMarketCacheIntoView(statusMessage = "") {
+  if (!Array.isArray(marketMinersCache) || marketMinersCache.length === 0) {
+    return false;
+  }
+
+  try {
+    updateMarketRecommendationsView(
+      statusMessage || `Restored ${marketMinersCache.length} cached market miners.`,
+      "neutral",
+    );
+  } catch (error) {
+    renderMarketRecommendations([]);
+    if (marketSummary) {
+      marketSummary.textContent = "";
+    }
+    setMarketStatus(
+      `Cached market miners restored (${marketMinersCache.length}), but filters are invalid: ${error.message}`,
+      "error",
+    );
+  }
+
+  return true;
+}
+
+async function initializeMarketCacheState() {
+  await resolveMarketCacheFilePath();
+
+  if (!restoreMarketMinersCache()) {
+    return false;
+  }
+
+  appendMarketLog(
+    `Restored ${marketMinersCache.length} cached market miners from ${getMarketCacheFilePath()}.`,
+    "info",
+  );
+  restoreMarketCacheIntoView();
+  saveMarketMinersCache();
+  return true;
+}
+
 async function handleLoadMarketMiners() {
   if (!rollercoinCookieInput) return;
 
   const previousMinersCache = Array.isArray(marketMinersCache) ? [...marketMinersCache] : [];
+  const previousCatalogCache = Array.isArray(marketMinerCatalogCache)
+    ? marketMinerCatalogCache.map((miner) => ({
+      ...miner,
+      imageCandidates: Array.isArray(miner?.imageCandidates) ? [...miner.imageCandidates] : [],
+    }))
+    : [];
   const previousSourceInfo = marketSourceInfo ? { ...marketSourceInfo } : null;
   const cookieHeader = rollercoinCookieInput.value.trim();
   const requestId = `market-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const hadCachedMarketData = marketMinersCache.length > 0;
+  const refreshPlan = buildMarketRefreshPlan();
   activeMarketRequestId = requestId;
   saveMarketSettings();
   clearMarketLogs();
   appendMarketLog("Load miners requested by user.", "info");
   appendMarketLog(`Request ID: ${requestId}`, "info");
+  appendMarketLog(
+    `Refresh plan: ${refreshPlan.map((phase) => `${phase.mode}@${phase.maxPages}`).join(" -> ")}.`,
+    "info",
+  );
   lastRenderedMarketRecommendations = [];
-  updateVisibleRowsControls({
-    button: showMoreMarketResultsBtn,
-    countInfo: marketResultsCountInfo,
-    visibleCount: 0,
-    totalCount: 0,
-    itemLabel: "market results",
-  });
-  if (marketResultsBody) {
-    marketResultsBody.innerHTML = `
-      <tr>
-        <td colspan="8" class="muted">Loading miners from market...</td>
-      </tr>
-    `;
-  }
-  if (marketSummary) {
-    marketSummary.textContent = "";
+  if (!hadCachedMarketData) {
+    updateVisibleRowsControls({
+      button: showMoreMarketResultsBtn,
+      countInfo: marketResultsCountInfo,
+      visibleCount: 0,
+      totalCount: 0,
+      itemLabel: "market results",
+    });
+    if (marketResultsBody) {
+      marketResultsBody.innerHTML = `
+        <tr>
+          <td colspan="8" class="muted">Loading miners from market...</td>
+        </tr>
+      `;
+    }
+    if (marketSummary) {
+      marketSummary.textContent = "";
+    }
+  } else {
+    restoreMarketCacheIntoView(
+      `Using ${marketMinersCache.length} cached market miners while refresh runs.`,
+    );
   }
   if (!cookieHeader) {
     appendMarketLog("Cookie field is empty. Session fetch will rely on in-app auth partition.", "warn");
   }
   setMarketControlsDisabled(true);
   setMarketStatus(
-    "Loading miners from market API. Direct mode runs first, browser mode is the fallback...",
+    hadCachedMarketData
+      ? `Refreshing market using cached data (${marketMinersCache.length} miners).`
+      : "Loading miners from market API. Direct mode runs first, browser mode is the fallback...",
     "neutral",
   );
   startMarketHeartbeat();
 
   try {
-    const loadResult = await fetchMarketMiners(cookieHeader, requestId);
-    marketMinersCache = loadResult.miners;
-    marketSourceInfo = normalizeMarketSourceInfo(loadResult, marketMinersCache.length);
-    saveMarketMinersCache();
-    appendMarketLog(
-      `Loaded ${marketMinersCache.length} miners from ${loadResult.endpoint}. Source path: ${loadResult.sourcePath}.`,
-      "success",
-    );
-    try {
-      updateMarketRecommendationsView(
-        `Loaded ${marketMinersCache.length} miners (${loadResult.endpoint}).`,
-        "success",
-      );
-    } catch (error) {
-      renderMarketRecommendations([]);
-      if (marketSummary) {
-        marketSummary.textContent = "";
-      }
-      appendMarketLog(`Loaded miners, but filters are invalid: ${error.message}`, "warn");
+    let hadSuccessfulPhase = false;
+    let lastPhaseError = null;
+
+    for (const phase of refreshPlan) {
+      appendMarketLog(`${phase.label} started.`, "info");
       setMarketStatus(
-        `Loaded ${marketMinersCache.length} miners, but filters are invalid: ${error.message}`,
+        `${phase.label} in progress. Direct mode runs first, browser mode is the fallback...`,
+        "neutral",
+      );
+
+      try {
+        const loadResult = await fetchMarketMiners(cookieHeader, requestId, {
+          refreshMode: phase.mode,
+          maxPages: phase.maxPages,
+          includeAttempts: phase.includeAttempts,
+        });
+        if (!loadResult || !Array.isArray(loadResult.miners) || loadResult.miners.length === 0) {
+          throw new Error("Market refresh returned no valid miners.");
+        }
+
+        const merged = applyMarketCatalogMerge(loadResult, phase.mode);
+        hadSuccessfulPhase = true;
+        lastPhaseError = null;
+
+        appendMarketLog(
+          `${phase.label} completed: scan=${loadResult.miners.length}, active=${merged.activeMiners.length}, ` +
+            `catalog=${merged.catalog.length}, source=${loadResult.endpoint || "unknown"}.`,
+          "success",
+        );
+        if (loadResult.partial && loadResult.warning) {
+          appendMarketLog(loadResult.warning, "warn");
+        }
+
+        try {
+          updateMarketRecommendationsView(
+            phase.mode === "quick"
+              ? `Quick refresh updated ${merged.activeMiners.length} cached market miners.`
+              : `Full refresh confirmed ${merged.activeMiners.length} market miners.`,
+            phase.mode === "quick" ? "neutral" : "success",
+          );
+        } catch (error) {
+          renderMarketRecommendations([]);
+          if (marketSummary) {
+            marketSummary.textContent = "";
+          }
+          appendMarketLog(`Loaded miners, but filters are invalid: ${error.message}`, "warn");
+          setMarketStatus(
+            `Loaded ${merged.activeMiners.length} miners, but filters are invalid: ${error.message}`,
+            "error",
+          );
+        }
+      } catch (error) {
+        lastPhaseError = error;
+        appendMarketLog(`${phase.label} failed: ${error.message}`, "warn");
+
+        if (phase.mode === "quick" && refreshPlan.some((entry) => entry.mode === "full")) {
+          appendMarketLog("Quick refresh failed. Continuing with full refresh.", "warn");
+          continue;
+        }
+
+        if (hadSuccessfulPhase) {
+          break;
+        }
+
+        throw error;
+      }
+    }
+
+    if (!hadSuccessfulPhase && lastPhaseError) {
+      throw lastPhaseError;
+    }
+
+    if (hadSuccessfulPhase && lastPhaseError) {
+      setMarketStatus(
+        `Market refresh finished with warnings: ${lastPhaseError.message}. Cached results were kept.`,
         "error",
       );
     }
   } catch (error) {
     appendMarketLog(`Load miners failed: ${error.message}`, "error");
 
-    if (previousMinersCache.length > 0) {
+    if (previousCatalogCache.length > 0 || previousMinersCache.length > 0) {
+      marketMinerCatalogCache = previousCatalogCache;
       marketMinersCache = previousMinersCache;
       marketSourceInfo = previousSourceInfo;
+      saveMarketMinersCache();
       appendMarketLog(
         `Showing previously cached miners (${previousMinersCache.length}) after refresh failure.`,
         "warn",
@@ -4400,8 +5267,10 @@ async function handleLoadMarketMiners() {
         );
       }
     } else {
+      marketMinerCatalogCache = [];
       marketMinersCache = [];
       marketSourceInfo = null;
+      saveMarketMinersCache();
       renderMarketRecommendations([]);
       if (marketSummary) {
         marketSummary.textContent = "";
@@ -4721,7 +5590,9 @@ function refreshPowerUnitViews() {
 
 async function initializeRollercoinSessionState() {
   setAuthIndicatorState("invalid", "No saved RollerCoin session. Login is required.");
-  setMarketStatus("Login to RollerCoin to load fresh data.", "neutral");
+  if (marketMinersCache.length === 0) {
+    setMarketStatus("Login to RollerCoin to load fresh data.", "neutral");
+  }
   setCurrentSystemSyncStatus("RollerCoin power sync is available after login.", "neutral");
   setRoomMinersStatus("Room miners are not loaded. Login to RollerCoin first.", "neutral");
 
@@ -4745,7 +5616,9 @@ async function initializeRollercoinSessionState() {
     }
 
     setAuthIndicatorState("checking", "Saved RollerCoin session restored. Click Check auth to verify it.");
-    setMarketStatus("Saved RollerCoin session restored. Verification is now manual to avoid extra startup windows.", "neutral");
+    if (marketMinersCache.length === 0) {
+      setMarketStatus("Saved RollerCoin session restored. Verification is now manual to avoid extra startup windows.", "neutral");
+    }
   } catch (error) {
     setAuthIndicatorState("invalid", `Saved session check failed: ${error.message}`);
   }
@@ -4917,4 +5790,5 @@ addCandidate();
 updateCurrentStats();
 renderCurrentSystemHistory();
 renderRoomMinersCollection([]);
+void initializeMarketCacheState();
 void initializeRollercoinSessionState();
