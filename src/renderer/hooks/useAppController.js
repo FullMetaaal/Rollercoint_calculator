@@ -83,6 +83,9 @@ export function useAppController() {
   const [comparison, setComparison] = useState(DEFAULT_COMPARISON);
   const [marketRecommendations, setMarketRecommendations] = useState(() => createEmptyMarketRecommendationsState());
   const marketHeartbeatRef = useRef(null);
+  const marketRef = useRef(market);
+  const currentSystemRef = useRef(currentSystem);
+  const startupAutomationStartedRef = useRef(false);
   const deferredRoomSearch = useDeferredValue(market.settings.roomMinersSearch);
 
   useEffect(() => {
@@ -90,8 +93,16 @@ export function useAppController() {
   }, [currentSystem]);
 
   useEffect(() => {
+    currentSystemRef.current = currentSystem;
+  }, [currentSystem]);
+
+  useEffect(() => {
     persistCurrentSystemHistory(currentSystemHistory);
   }, [currentSystemHistory]);
+
+  useEffect(() => {
+    marketRef.current = market;
+  }, [market]);
 
   useEffect(() => {
     if (market.marketCatalog.length > 0 && market.marketSourceInfo) {
@@ -112,41 +123,6 @@ export function useAppController() {
       });
     });
     return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function initializeSession() {
-      try {
-        const sessionInfo = await invokeAuthSession();
-        const cookieHeader =
-          sessionInfo && typeof sessionInfo.cookieHeader === "string"
-            ? sessionInfo.cookieHeader.trim()
-            : "";
-
-        if (!cancelled && cookieHeader) {
-          setMarket((prev) => ({
-            ...prev,
-            cookieHeader,
-            authStatus: "checking",
-            authMessage: "Saved RollerCoin session restored. Click Check auth to verify it.",
-            marketStatus:
-              prev.marketMiners.length === 0
-                ? "Saved RollerCoin session restored. Verification is now manual to avoid extra startup windows."
-                : prev.marketStatus,
-            currentPowerSyncStatus: "RollerCoin power sync is available after login.",
-          }));
-        }
-      } catch (error) {
-        writeRendererLog("initializeSession failed", { message: error?.message || String(error) });
-      }
-    }
-
-    void initializeSession();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => () => {
@@ -271,7 +247,12 @@ export function useAppController() {
     }));
   }
 
-  async function checkAuth(silent = false) {
+  async function checkAuth(silent = false, options = {}) {
+    const cookieHeader =
+      typeof options.cookieHeader === "string"
+        ? options.cookieHeader.trim()
+        : marketRef.current.cookieHeader;
+
     setMarket((prev) => ({
       ...prev,
       authChecking: true,
@@ -280,32 +261,50 @@ export function useAppController() {
     }));
 
     try {
-      const authResult = await invokeAuthStatus(market.cookieHeader);
+      const authResult = await invokeAuthStatus(cookieHeader);
       if (authResult?.authenticated) {
         setMarket((prev) => ({
           ...prev,
+          cookieHeader: cookieHeader || prev.cookieHeader,
           authChecking: false,
           authStatus: "valid",
           authMessage: "Session is active.",
           marketStatus: silent ? prev.marketStatus : "RollerCoin session is active. Market loading is available.",
         }));
+        return {
+          authenticated: true,
+          cookieHeader: cookieHeader || marketRef.current.cookieHeader,
+          ...authResult,
+        };
       } else {
         setMarket((prev) => ({
           ...prev,
+          cookieHeader: cookieHeader || prev.cookieHeader,
           authChecking: false,
           authStatus: "invalid",
           authMessage: authResult?.message || "RollerCoin session is not authorized. Login is required.",
           marketStatus: silent ? prev.marketStatus : "RollerCoin login is required before loading market miners.",
         }));
+        return {
+          authenticated: false,
+          cookieHeader: cookieHeader || marketRef.current.cookieHeader,
+          ...authResult,
+        };
       }
     } catch (error) {
       setMarket((prev) => ({
         ...prev,
+        cookieHeader: cookieHeader || prev.cookieHeader,
         authChecking: false,
         authStatus: "invalid",
         authMessage: `Auth check failed: ${error.message}`,
         marketStatus: silent ? prev.marketStatus : `Auth check failed: ${error.message}`,
       }));
+      return {
+        authenticated: false,
+        cookieHeader: cookieHeader || marketRef.current.cookieHeader,
+        message: `Auth check failed: ${error.message}`,
+      };
     }
   }
 
@@ -318,9 +317,20 @@ export function useAppController() {
   }
 
   async function loginToRollerCoin() {
+    setMarket((prev) => ({
+      ...prev,
+      authChecking: true,
+      authStatus: "checking",
+      authMessage: "Opening RollerCoin login window...",
+      marketStatus: "RollerCoin login is required. Opening the login window...",
+    }));
+
     try {
-      await invokeAuthLogin();
-      const sessionInfo = await invokeAuthSession();
+      const loginSessionInfo = await invokeAuthLogin();
+      const sessionInfo =
+        loginSessionInfo && typeof loginSessionInfo === "object"
+          ? loginSessionInfo
+          : await invokeAuthSession();
       const cookieHeader =
         sessionInfo && typeof sessionInfo.cookieHeader === "string"
           ? sessionInfo.cookieHeader.trim()
@@ -329,18 +339,30 @@ export function useAppController() {
         ...prev,
         cookieHeader,
         authStatus: cookieHeader ? "checking" : "invalid",
+        authChecking: false,
         authMessage: cookieHeader ? "Saved RollerCoin session restored. Click Check auth to verify it." : "No saved RollerCoin session. Login is required.",
       }));
       if (cookieHeader) {
-        await checkAuth(true);
+        return checkAuth(true, { cookieHeader });
       }
+      return {
+        authenticated: false,
+        cookieHeader: "",
+        message: "No saved RollerCoin session. Login is required.",
+      };
     } catch (error) {
       setMarket((prev) => ({
         ...prev,
+        authChecking: false,
         authStatus: "invalid",
         authMessage: `Login failed: ${error.message}`,
         marketStatus: `Login error: ${error.message}`,
       }));
+      return {
+        authenticated: false,
+        cookieHeader: "",
+        message: `Login failed: ${error.message}`,
+      };
     }
   }
 
@@ -393,7 +415,12 @@ export function useAppController() {
     }
   }
 
-  async function loadRoomMiners() {
+  async function loadRoomMiners(options = {}) {
+    const cookieHeader =
+      typeof options.cookieHeader === "string"
+        ? options.cookieHeader.trim()
+        : marketRef.current.cookieHeader;
+
     setMarket((prev) => ({
       ...prev,
       roomMinersLoadInFlight: true,
@@ -401,7 +428,7 @@ export function useAppController() {
     }));
 
     try {
-      const roomResult = await invokeRoomConfig(market.cookieHeader);
+      const roomResult = await invokeRoomConfig(cookieHeader);
       if (!roomResult?.success || !Array.isArray(roomResult.miners)) {
         throw new Error(roomResult?.error || "Failed to load room miners.");
       }
@@ -426,6 +453,15 @@ export function useAppController() {
         marketLogs: appendMarketLog(prev.marketLogs, `Loaded ${normalizedRoomMiners.length} room miners.`, "success"),
       }));
       clearMarketRecommendations();
+      return {
+        success: true,
+        roomMiners: normalizedRoomMiners,
+        roomMinersSourceInfo: {
+          endpoint: roomResult.endpoint || "https://rollercoin.com/api/game/room-config/",
+          roomConfigId: roomResult.roomConfigId || "",
+          loadedAt: Date.now(),
+        },
+      };
     } catch (error) {
       setMarket((prev) => ({
         ...prev,
@@ -437,6 +473,12 @@ export function useAppController() {
         marketSummary: "",
       }));
       clearMarketRecommendations();
+      return {
+        success: false,
+        roomMiners: [],
+        roomMinersSourceInfo: null,
+        error: error.message,
+      };
     }
   }
 
@@ -460,12 +502,17 @@ export function useAppController() {
     }
   }
 
-  async function loadMarketMiners() {
+  async function loadMarketMiners(options = {}) {
+    const marketState = marketRef.current;
     const requestId = `market-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const refreshPlan = buildMarketRefreshPlan(market.marketSourceInfo);
-    const previousCatalog = market.marketCatalog;
-    const previousMiners = market.marketMiners;
-    const previousSourceInfo = market.marketSourceInfo;
+    const refreshPlan = buildMarketRefreshPlan(marketState.marketSourceInfo);
+    const previousCatalog = marketState.marketCatalog;
+    const previousMiners = marketState.marketMiners;
+    const previousSourceInfo = marketState.marketSourceInfo;
+    const cookieHeader =
+      typeof options.cookieHeader === "string"
+        ? options.cookieHeader.trim()
+        : marketState.cookieHeader;
 
     if (marketHeartbeatRef.current) {
       clearInterval(marketHeartbeatRef.current);
@@ -498,6 +545,7 @@ export function useAppController() {
     try {
       let mergedCatalog = previousCatalog;
       let mergedSourceInfo = previousSourceInfo;
+      let mergedActiveMiners = previousMiners;
       let hadSuccess = false;
 
       for (const phase of refreshPlan) {
@@ -507,7 +555,7 @@ export function useAppController() {
           marketStatus: `${phase.label} in progress. Direct mode runs first, browser mode is the fallback...`,
         }));
 
-        const loadResult = await invokeMarketFetch(market.cookieHeader, requestId, {
+        const loadResult = await invokeMarketFetch(cookieHeader, requestId, {
           refreshMode: phase.mode,
           maxPages: phase.maxPages,
           includeAttempts: phase.includeAttempts,
@@ -530,6 +578,7 @@ export function useAppController() {
         });
         mergedCatalog = merged.catalog;
         mergedSourceInfo = merged.sourceInfo;
+        mergedActiveMiners = merged.activeMiners;
         hadSuccess = true;
 
         setMarket((prev) => ({
@@ -557,6 +606,16 @@ export function useAppController() {
       if (!hadSuccess) {
         throw new Error("Market refresh returned no valid miners.");
       }
+      return {
+        success: true,
+        marketCatalog: mergedCatalog,
+        marketMiners: mergedActiveMiners,
+        marketSourceInfo: normalizeMarketSourceInfo({
+          ...mergedSourceInfo,
+          catalogCount: mergedCatalog.length,
+          activeCount: mergedActiveMiners.length,
+        }, mergedActiveMiners.length),
+      };
     } catch (error) {
       setMarket((prev) => ({
         ...prev,
@@ -570,6 +629,13 @@ export function useAppController() {
         marketSummary: "",
         marketLogs: appendMarketLog(prev.marketLogs, `Load miners failed: ${error.message}`, "error"),
       }));
+      return {
+        success: false,
+        marketCatalog: previousCatalog,
+        marketMiners: previousMiners,
+        marketSourceInfo: previousSourceInfo,
+        error: error.message,
+      };
     } finally {
       if (marketHeartbeatRef.current) {
         clearInterval(marketHeartbeatRef.current);
@@ -583,16 +649,17 @@ export function useAppController() {
     }
   }
 
-  function findBestMarketOptions() {
+  function findBestMarketOptions(options = {}) {
+    const marketState = marketRef.current;
     const nextRecommendations = buildMarketRecommendations({
-      currentSystemState: currentSystem,
-      marketMiners: market.marketMiners,
-      roomMiners: market.roomMiners,
+      currentSystemState: options.currentSystemState || currentSystemRef.current,
+      marketMiners: Array.isArray(options.marketMiners) ? options.marketMiners : marketState.marketMiners,
+      roomMiners: Array.isArray(options.roomMiners) ? options.roomMiners : marketState.roomMiners,
       marketSettings: {
-        ...market.settings,
+        ...(options.marketSettings || marketState.settings),
         roomMinersSearch: deferredRoomSearch,
       },
-      marketSourceInfo: market.marketSourceInfo,
+      marketSourceInfo: options.marketSourceInfo || marketState.marketSourceInfo,
     });
 
     setMarketRecommendations({
@@ -605,13 +672,131 @@ export function useAppController() {
       marketSummary: nextRecommendations.marketSummary || "",
       visibleMarketResultsCount: TABLE_RENDER_BATCH_SIZE,
       marketStatus:
-        prev.marketMiners.length === 0
+        (Array.isArray(options.marketMiners) ? options.marketMiners.length : prev.marketMiners.length) === 0
           ? "Load market miners first."
           : nextRecommendations.error
             ? `Filter error: ${nextRecommendations.error}`
             : `Recommendations updated. ${nextRecommendations.upgradeItems.length} profitable option(s) found.`,
     }));
+    return nextRecommendations;
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    if (startupAutomationStartedRef.current) return undefined;
+    startupAutomationStartedRef.current = true;
+
+    async function runStartupAutomation() {
+      try {
+        setMarket((prev) => ({
+          ...prev,
+          authChecking: true,
+          authStatus: "checking",
+          authMessage: "Checking RollerCoin session...",
+          marketStatus: "Starting automatic RollerCoin sync...",
+        }));
+
+        const sessionInfo = await invokeAuthSession();
+        if (cancelled) return;
+
+        const restoredCookieHeader =
+          sessionInfo && typeof sessionInfo.cookieHeader === "string"
+            ? sessionInfo.cookieHeader.trim()
+            : "";
+
+        if (restoredCookieHeader) {
+          setMarket((prev) => ({
+            ...prev,
+            cookieHeader: restoredCookieHeader,
+            authStatus: "checking",
+            authMessage: "Saved RollerCoin session restored. Checking authorization automatically...",
+            currentPowerSyncStatus: "RollerCoin power sync is available after login.",
+          }));
+        }
+
+        let authResult = await checkAuth(true, { cookieHeader: restoredCookieHeader });
+        if (cancelled) return;
+
+        if (!authResult?.authenticated) {
+          authResult = await loginToRollerCoin();
+          if (cancelled) return;
+        }
+
+        if (!authResult?.authenticated) {
+          setMarket((prev) => ({
+            ...prev,
+            authChecking: false,
+            authStatus: "invalid",
+            authMessage: authResult?.message || "RollerCoin session is not authorized. Login is required.",
+            marketStatus: authResult?.message || "RollerCoin login is required before loading market miners.",
+          }));
+          return;
+        }
+
+        const activeCookieHeader =
+          typeof authResult.cookieHeader === "string" && authResult.cookieHeader.trim()
+            ? authResult.cookieHeader.trim()
+            : marketRef.current.cookieHeader;
+
+        setMarket((prev) => ({
+          ...prev,
+          cookieHeader: activeCookieHeader,
+          authChecking: false,
+          authStatus: "valid",
+          authMessage: "Session is active.",
+          marketStatus: "Authorization confirmed. Loading room miners automatically...",
+        }));
+
+        const roomLoadResult = await loadRoomMiners({ cookieHeader: activeCookieHeader });
+        if (cancelled) return;
+
+        setMarket((prev) => ({
+          ...prev,
+          marketStatus: roomLoadResult.success
+            ? "Room miners loaded. Refreshing market automatically..."
+            : `Room miners auto-load failed: ${roomLoadResult.error || "unknown error"}. Refreshing market automatically...`,
+        }));
+
+        const marketLoadResult = await loadMarketMiners({ cookieHeader: activeCookieHeader });
+        if (cancelled) return;
+
+        if (!marketLoadResult?.success) {
+          setMarket((prev) => ({
+            ...prev,
+            marketStatus: `Automatic market refresh failed: ${marketLoadResult?.error || "unknown error"}`,
+          }));
+          return;
+        }
+
+        const nextRecommendations = findBestMarketOptions({
+          marketMiners: marketLoadResult.marketMiners,
+          roomMiners: roomLoadResult.success ? roomLoadResult.roomMiners : marketRef.current.roomMiners,
+          marketSourceInfo: marketLoadResult.marketSourceInfo,
+        });
+        if (cancelled) return;
+
+        setMarket((prev) => ({
+          ...prev,
+          marketStatus: nextRecommendations.error
+            ? `Automatic refresh completed with filter error: ${nextRecommendations.error}`
+            : `Automatic refresh completed. ${nextRecommendations.upgradeItems.length} profitable option(s) found.`,
+        }));
+      } catch (error) {
+        if (cancelled) return;
+        writeRendererLog("startup automation failed", { message: error?.message || String(error) });
+        setMarket((prev) => ({
+          ...prev,
+          authChecking: false,
+          marketStatus: `Automatic startup sync failed: ${error?.message || String(error)}`,
+        }));
+      }
+    }
+
+    void runStartupAutomation();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return {
     currentSystem,

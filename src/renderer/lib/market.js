@@ -354,26 +354,37 @@ function extractBonusPercent(item, options = {}) {
     return value;
   };
   const directBonus = firstFinite([
+    item?.bonusPercent,
     item?.miner_bonus,
     item?.percent_bonus,
     item?.bonus_percent,
     item?.bonus,
+    getByPath(item, "price.bonusPercent"),
     getByPath(item, "price.miner_bonus"),
+    getByPath(item, "item.bonusPercent"),
     getByPath(item, "item.miner_bonus"),
     getByPath(item, "item.percent_bonus"),
     getByPath(item, "item.bonus_percent"),
+    getByPath(item, "item_info.bonusPercent"),
     getByPath(item, "item_info.miner_bonus"),
     getByPath(item, "item_info.percent_bonus"),
     getByPath(item, "item_info.bonus_percent"),
+    getByPath(item, "miner.bonusPercent"),
     getByPath(item, "miner.miner_bonus"),
     getByPath(item, "miner.percent_bonus"),
     getByPath(item, "miner.bonus_percent"),
+    getByPath(item, "sale.bonusPercent"),
     getByPath(item, "sale.miner_bonus"),
     getByPath(item, "sale.percent_bonus"),
     getByPath(item, "sale.bonus_percent"),
+    getByPath(item, "product.bonusPercent"),
     getByPath(item, "product.miner_bonus"),
     getByPath(item, "product.percent_bonus"),
     getByPath(item, "product.bonus_percent"),
+    getByPath(item, "raw.bonusPercent"),
+    getByPath(item, "raw.miner_bonus"),
+    getByPath(item, "raw.percent_bonus"),
+    getByPath(item, "raw.bonus_percent"),
   ]);
   if (Number.isFinite(directBonus)) {
     if (saleOrdersRaw) {
@@ -397,12 +408,20 @@ function extractBonusPercent(item, options = {}) {
   }
 
   const nestedBonus = firstFinite([
+    getByPath(item, "bonus.powerPercent"),
     getByPath(item, "bonus.power_percent"),
+    getByPath(item, "item.bonus.powerPercent"),
     getByPath(item, "item.bonus.power_percent"),
+    getByPath(item, "item_info.bonus.powerPercent"),
     getByPath(item, "item_info.bonus.power_percent"),
+    getByPath(item, "miner.bonus.powerPercent"),
     getByPath(item, "miner.bonus.power_percent"),
+    getByPath(item, "sale.bonus.powerPercent"),
     getByPath(item, "sale.bonus.power_percent"),
+    getByPath(item, "product.bonus.powerPercent"),
     getByPath(item, "product.bonus.power_percent"),
+    getByPath(item, "raw.bonus.powerPercent"),
+    getByPath(item, "raw.bonus.power_percent"),
   ]);
   if (!Number.isFinite(nestedBonus)) return 0;
   if (saleOrdersRaw || roomRaw) return nestedBonus / 100;
@@ -546,8 +565,46 @@ export function normalizeRoomMiners(rawItems) {
     .filter(Boolean);
 }
 
+function getMarketVariantSignature(miner) {
+  return [
+    String(miner?.name || "").trim().toLowerCase(),
+    Number.isFinite(Number(miner?.power)) ? Number(miner.power) : "na",
+    Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : "na",
+    Number.isFinite(Number(miner?.level)) ? Math.floor(Number(miner.level)) : "na",
+  ].join("|");
+}
+
+function buildMarketVariantKey(miner, bonusPercent) {
+  return `${String(miner?.name || "").trim().toLowerCase()}|${Number(miner?.power) || 0}|${bonusPercent}|${miner?.width || "na"}|${miner?.level || "na"}`;
+}
+
+function mergeNormalizedMarketVariant(existingMiner, nextMiner) {
+  if (!existingMiner) return nextMiner;
+  const existingPrice = Number(existingMiner?.price);
+  const nextPrice = Number(nextMiner?.price);
+  const takeNext =
+    !Number.isFinite(existingPrice) ||
+    (Number.isFinite(nextPrice) && nextPrice < existingPrice);
+  const preferred = takeNext ? nextMiner : existingMiner;
+  const secondary = takeNext ? existingMiner : nextMiner;
+
+  return {
+    ...secondary,
+    ...preferred,
+    firstSeenAt: Math.min(
+      Number.isFinite(Number(existingMiner?.firstSeenAt)) ? Number(existingMiner.firstSeenAt) : Number.MAX_SAFE_INTEGER,
+      Number.isFinite(Number(nextMiner?.firstSeenAt)) ? Number(nextMiner.firstSeenAt) : Number.MAX_SAFE_INTEGER,
+    ),
+    lastSeenAt: Math.max(Number(existingMiner?.lastSeenAt) || 0, Number(nextMiner?.lastSeenAt) || 0),
+    lastPriceRefreshAt: Math.max(
+      Number(existingMiner?.lastPriceRefreshAt) || 0,
+      Number(nextMiner?.lastPriceRefreshAt) || 0,
+    ),
+  };
+}
+
 export function normalizeMarketMiners(rawItems) {
-  return (Array.isArray(rawItems) ? rawItems : [])
+  const normalized = (Array.isArray(rawItems) ? rawItems : [])
     .map((item, index) => {
       const miner = buildNormalizedMinerBase(item, index, "Marketplace miner", { market: true });
       const price = Number.isFinite(Number(miner?.extractedPrice))
@@ -560,16 +617,50 @@ export function normalizeMarketMiners(rawItems) {
       return {
         ...baseMiner,
         sourceOfferId: miner.id,
-        variantKey: `${miner.name.toLowerCase()}|${miner.power}|${miner.bonusPercent}|${miner.width || "na"}|${miner.level || "na"}`,
         price,
-        effectivePower: miner.power * (1 + miner.bonusPercent / 100),
-        efficiency: price > 0 ? (miner.power * (1 + miner.bonusPercent / 100)) / price : NaN,
         firstSeenAt: Number(item?.firstSeenAt) || now,
         lastSeenAt: Number(item?.lastSeenAt) || now,
         lastPriceRefreshAt: Number(item?.lastPriceRefreshAt) || now,
       };
     })
     .filter(Boolean);
+
+  const inferredBonusBySignature = new Map();
+  normalized.forEach((miner) => {
+    const bonusPercent = Number(miner?.bonusPercent);
+    if (!Number.isFinite(bonusPercent) || bonusPercent <= 0) return;
+    const signature = getMarketVariantSignature(miner);
+    const existing = inferredBonusBySignature.get(signature);
+    if (!Number.isFinite(existing) || bonusPercent > existing) {
+      inferredBonusBySignature.set(signature, bonusPercent);
+    }
+  });
+
+  const deduped = new Map();
+  normalized.forEach((miner) => {
+    const signature = getMarketVariantSignature(miner);
+    const inferredBonus = inferredBonusBySignature.get(signature);
+    const ownBonus = Number.isFinite(Number(miner?.bonusPercent)) ? Number(miner.bonusPercent) : 0;
+    const resolvedBonusPercent = ownBonus > 0
+      ? ownBonus
+      : (Number.isFinite(inferredBonus) ? inferredBonus : 0);
+    const resolvedMiner = {
+      ...miner,
+      bonusPercent: resolvedBonusPercent,
+      variantKey: buildMarketVariantKey(miner, resolvedBonusPercent),
+      effectivePower: Number(miner.power) * (1 + resolvedBonusPercent / 100),
+      efficiency:
+        Number(miner.price) > 0
+          ? (Number(miner.power) * (1 + resolvedBonusPercent / 100)) / Number(miner.price)
+          : NaN,
+    };
+    deduped.set(
+      resolvedMiner.variantKey,
+      mergeNormalizedMarketVariant(deduped.get(resolvedMiner.variantKey), resolvedMiner),
+    );
+  });
+
+  return [...deduped.values()];
 }
 
 export const normalizeCachedMarketMiners = normalizeMarketMiners;

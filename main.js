@@ -1382,6 +1382,58 @@ function normalizeFirstOffer(row) {
   };
 }
 
+function buildMarketplaceOfferIdentityKey(offer) {
+  if (!offer || typeof offer !== "object") return "";
+  const id = offer.id ? String(offer.id) : "";
+  const name = String(offer.name || "").trim().toLowerCase();
+  const price = Number.isFinite(Number(offer.price)) ? Number(offer.price) : "na";
+  const power = Number.isFinite(Number(offer.power)) ? Number(offer.power) : "na";
+  const width = Number.isFinite(Number(offer.width)) ? Math.floor(Number(offer.width)) : "na";
+  const level = Number.isFinite(Number(offer.level)) ? Math.floor(Number(offer.level)) : "na";
+  return id || `${name}:${price}:${power}:${width}:${level}`;
+}
+
+function choosePreferredMarketplaceOffer(existingOffer, nextOffer) {
+  if (!existingOffer) return nextOffer;
+  if (!nextOffer) return existingOffer;
+
+  const existingBonus = Number(existingOffer.bonus_percent) || 0;
+  const nextBonus = Number(nextOffer.bonus_percent) || 0;
+  if (nextBonus !== existingBonus) {
+    return nextBonus > existingBonus ? nextOffer : existingOffer;
+  }
+
+  const existingPrice = Number(existingOffer.price);
+  const nextPrice = Number(nextOffer.price);
+  if (Number.isFinite(nextPrice) && (!Number.isFinite(existingPrice) || nextPrice < existingPrice)) {
+    return nextOffer;
+  }
+
+  const existingHasImage = Boolean(existingOffer.image_url);
+  const nextHasImage = Boolean(nextOffer.image_url);
+  if (nextHasImage && !existingHasImage) {
+    return nextOffer;
+  }
+
+  return existingOffer;
+}
+
+function upsertMarketplaceOffer(offers, offerIndexByKey, offer) {
+  const dedupeKey = buildMarketplaceOfferIdentityKey(offer);
+  if (!dedupeKey) return false;
+
+  const existingIndex = offerIndexByKey.get(dedupeKey);
+  if (!Number.isFinite(existingIndex)) {
+    offerIndexByKey.set(dedupeKey, offers.length);
+    offers.push(offer);
+    return true;
+  }
+
+  const preferredOffer = choosePreferredMarketplaceOffer(offers[existingIndex], offer);
+  offers[existingIndex] = preferredOffer;
+  return preferredOffer === offer;
+}
+
 function buildMarketplaceSaleOrdersUrl(page, profile = {}) {
   const limit =
     Number.isFinite(Number(profile.limit)) && Number(profile.limit) > 0
@@ -1802,6 +1854,7 @@ async function fetchMarketMinersViaDirectApi(preferredCookieHeader = "", progres
   }
 
   const marketplaceOffers = [];
+  const marketplaceOfferIndexByKey = new Map();
   const seenOfferKeys = new Set();
   const seenPageFirstKeys = new Set();
   const pageFailureCounts = new Map();
@@ -1981,7 +2034,7 @@ async function fetchMarketMinersViaDirectApi(preferredCookieHeader = "", progres
         .filter((row) => hasValidNormalizedOffer(row));
       const firstRow = normalizedRows[0] || null;
       const pageFirstKey = firstRow
-        ? `${firstRow.id}:${firstRow.price}:${firstRow.power}:${firstRow.bonus_percent || 0}`
+        ? buildMarketplaceOfferIdentityKey(firstRow)
         : `page-${page}-empty`;
 
       if (seenPageFirstKeys.has(pageFirstKey)) {
@@ -2014,14 +2067,22 @@ async function fetchMarketMinersViaDirectApi(preferredCookieHeader = "", progres
 
       let addedRows = 0;
       normalizedRows.forEach((row) => {
-        const dedupeKey = `${row.id}:${row.price}:${row.power}:${row.bonus_percent || 0}`;
-        if (seenOfferKeys.has(dedupeKey)) return;
-        seenOfferKeys.add(dedupeKey);
-        marketplaceOffers.push({
+        const normalizedRow = {
           ...row,
           source: "marketplace-buy-direct-api",
-        });
-        addedRows += 1;
+        };
+        const dedupeKey = buildMarketplaceOfferIdentityKey(normalizedRow);
+        if (!dedupeKey) return;
+        const existedBefore = seenOfferKeys.has(dedupeKey);
+        seenOfferKeys.add(dedupeKey);
+        const insertedOrImproved = upsertMarketplaceOffer(
+          marketplaceOffers,
+          marketplaceOfferIndexByKey,
+          normalizedRow,
+        );
+        if (!existedBefore || insertedOrImproved) {
+          addedRows += 1;
+        }
       });
 
       pageFailureCounts.delete(page);
@@ -2217,6 +2278,7 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
           const maxPages = ${effectiveMaxPages};
           const attempts = [];
           const offers = [];
+          const offerIndexByKey = new Map();
           const seenOfferKeys = new Set();
           const tokenCandidates = [];
           const queryProfiles = [
@@ -2230,6 +2292,58 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
             const matching = images.find((image) => /miner|storage|market/i.test(String(image.src || "")));
             return matching ? String(matching.src || "") : "";
           })();
+
+          const buildOfferIdentityKey = (offer) => {
+            if (!offer || typeof offer !== "object") return "";
+            const id = offer.id ? String(offer.id) : "";
+            const name = String(offer.name || "").trim().toLowerCase();
+            const price = Number.isFinite(Number(offer.price)) ? Number(offer.price) : "na";
+            const power = Number.isFinite(Number(offer.power)) ? Number(offer.power) : "na";
+            const width = Number.isFinite(Number(offer.width)) ? Math.floor(Number(offer.width)) : "na";
+            const level = Number.isFinite(Number(offer.level)) ? Math.floor(Number(offer.level)) : "na";
+            return id || (name + ":" + price + ":" + power + ":" + width + ":" + level);
+          };
+
+          const choosePreferredOffer = (existingOffer, nextOffer) => {
+            if (!existingOffer) return nextOffer;
+            if (!nextOffer) return existingOffer;
+
+            const existingBonus = Number(existingOffer.bonus_percent) || 0;
+            const nextBonus = Number(nextOffer.bonus_percent) || 0;
+            if (nextBonus !== existingBonus) {
+              return nextBonus > existingBonus ? nextOffer : existingOffer;
+            }
+
+            const existingPrice = Number(existingOffer.price);
+            const nextPrice = Number(nextOffer.price);
+            if (Number.isFinite(nextPrice) && (!Number.isFinite(existingPrice) || nextPrice < existingPrice)) {
+              return nextOffer;
+            }
+
+            const existingHasImage = Boolean(existingOffer.image_url);
+            const nextHasImage = Boolean(nextOffer.image_url);
+            if (nextHasImage && !existingHasImage) {
+              return nextOffer;
+            }
+
+            return existingOffer;
+          };
+
+          const upsertOffer = (offersList, offerMap, offer) => {
+            const dedupeKey = buildOfferIdentityKey(offer);
+            if (!dedupeKey) return false;
+
+            const existingIndex = offerMap.get(dedupeKey);
+            if (!Number.isFinite(existingIndex)) {
+              offerMap.set(dedupeKey, offersList.length);
+              offersList.push(offer);
+              return true;
+            }
+
+            const preferredOffer = choosePreferredOffer(offersList[existingIndex], offer);
+            offersList[existingIndex] = preferredOffer;
+            return preferredOffer === offer;
+          };
 
           const fetchWithTimeout = async (url, options, timeoutMs) => {
             const controller = new AbortController();
@@ -2951,11 +3065,14 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
 
               let addedRows = 0;
               normalizedRows.forEach((row) => {
-                const dedupeKey = String(row.id) + ":" + String(row.price) + ":" + String(row.power) + ":" + String(row.bonus_percent || 0);
-                if (seenOfferKeys.has(dedupeKey)) return;
+                const dedupeKey = buildOfferIdentityKey(row);
+                if (!dedupeKey) return;
+                const existedBefore = seenOfferKeys.has(dedupeKey);
                 seenOfferKeys.add(dedupeKey);
-                offers.push(row);
-                addedRows += 1;
+                const insertedOrImproved = upsertOffer(offers, offerIndexByKey, row);
+                if (!existedBefore || insertedOrImproved) {
+                  addedRows += 1;
+                }
               });
               pageFailureCounts.delete(page);
               attempts.push({ step: "page-added", page, added: addedRows, totalOffers: offers.length });
@@ -4490,9 +4607,8 @@ async function scanMarketplaceBuyInteractive(progress = null, options = {}) {
       const activePageAfter = parsePositivePage(probe?.activePageAfter);
       cycleOffers.forEach((normalized) => {
         if (!normalized || typeof normalized !== "object") return;
-        const key =
-          normalized.id ||
-          `${normalized.name}:${normalized.price}:${normalized.power}:${normalized.bonus_percent}`;
+        const key = buildMarketplaceOfferIdentityKey(normalized);
+        if (!key) return;
         if (seenFirstOfferKeys.has(key)) return;
         seenFirstOfferKeys.add(key);
         firstOffers.push({
