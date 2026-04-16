@@ -46,9 +46,16 @@ function createEmptyMarketRecommendationsState() {
     items: [],
     allItems: [],
     upgradeItems: [],
+    cheaperUpgradeItems: [],
+    maxPowerUpgradeItems: [],
     marketSummary: "",
     replacementEnabled: false,
     replacementPendingRoomLoad: false,
+    replacementRequested: false,
+    replacementStrategy: "off",
+    recommendationMode: "budget",
+    sortMode: "gainPerPrice",
+    budget: null,
     bundleCount: 0,
     recommendedCount: 0,
     totalMatched: 0,
@@ -238,7 +245,13 @@ export function useAppController() {
           : prev.marketStatus,
       visibleRoomMinersCount: field === "roomMinersSearch" || field === "roomMinersSortMode" ? TABLE_RENDER_BATCH_SIZE : prev.visibleRoomMinersCount,
       visibleMarketResultsCount:
-        field === "budget" || field === "maxMinerPrice" || field === "sortMode" || field === "topN" || field === "roomWidthMode"
+        field === "budget" ||
+        field === "maxMinerPrice" ||
+        field === "sortMode" ||
+        field === "topN" ||
+        field === "roomWidthMode" ||
+        field === "recommendationMode" ||
+        field === "replacementStrategy"
           ? TABLE_RENDER_BATCH_SIZE
           : prev.visibleMarketResultsCount,
     }));

@@ -1,8 +1,169 @@
+import { useEffect, useState } from "react";
 import { formatMarketValue, formatPowerFromPhs } from "../lib/power";
 
+function buildMinerMeta(miner) {
+  const parts = [];
+  if (Number.isFinite(Number(miner?.level)) && Number(miner.level) > 0) {
+    parts.push(`L${Math.floor(Number(miner.level))}`);
+  }
+  if (Number.isFinite(Number(miner?.width)) && Number(miner.width) > 0) {
+    parts.push(`Width ${Math.floor(Number(miner.width))}`);
+  }
+  if (Number.isFinite(Number(miner?.bonusPercent))) {
+    parts.push(`${formatMarketValue(miner.bonusPercent, 2)}% bonus`);
+  }
+  return parts.join(" • ");
+}
+
+function buildBudgetLabel(recommendations) {
+  return Number.isFinite(Number(recommendations?.budget))
+    ? `Budget: ${formatMarketValue(recommendations.budget, 2)} RLT`
+    : "Budget: not set";
+}
+
+function MinerVisual({ miner, className = "" }) {
+  const imageSources = [...new Set(
+    [
+      miner?.imageUrl,
+      ...(Array.isArray(miner?.imageCandidates) ? miner.imageCandidates : []),
+    ].filter((entry) => typeof entry === "string" && entry.trim()),
+  )];
+  const sourcesKey = imageSources.join("|");
+  const [sourceIndex, setSourceIndex] = useState(0);
+
+  useEffect(() => {
+    setSourceIndex(0);
+  }, [sourcesKey]);
+
+  const currentSource = imageSources[sourceIndex] || "";
+  const showImage = Boolean(currentSource) && sourceIndex < imageSources.length;
+
+  return (
+    <div className={`market-miner-thumb-wrap ${className}`.trim()}>
+      {showImage ? (
+        <img
+          className="market-miner-thumb"
+          src={currentSource}
+          alt={miner?.name || "Miner"}
+          loading="lazy"
+          onError={() => {
+            setSourceIndex((prev) => (prev + 1 < imageSources.length ? prev + 1 : imageSources.length));
+          }}
+        />
+      ) : (
+        <div className="market-miner-thumb placeholder">
+          {String(miner?.name || "M").slice(0, 1).toUpperCase()}
+        </div>
+      )}
+      {miner?.levelBadgeUrl ? (
+        <img
+          className="market-miner-level-badge"
+          src={miner.levelBadgeUrl}
+          alt={`Level ${miner.level || ""}`}
+          loading="lazy"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function MinerCard({ miner, tone = "buy", displayUnit = "Ph/s" }) {
+  return (
+    <div className={`suggestion-miner-card suggestion-miner-card-${tone}`}>
+      <MinerVisual miner={miner} className="suggestion-miner-visual" />
+      <div className="suggestion-miner-copy">
+        <div className="suggestion-miner-name">{miner.name}</div>
+        <div className="suggestion-miner-meta">
+          <span className="positive">{formatPowerFromPhs(miner.power, displayUnit)}</span>
+          <span className={Number(miner.bonusPercent) > 0 ? "positive" : "muted"}>
+            {formatMarketValue(miner.bonusPercent, 2)}% bonus
+          </span>
+          {Number.isFinite(Number(miner.width)) ? <span className="muted">W{Math.floor(Number(miner.width))}</span> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SuggestionItem({ item, index, displayUnit }) {
+  const purchaseMiners = Array.isArray(item.purchaseMiners) && item.purchaseMiners.length > 0
+    ? item.purchaseMiners
+    : [item];
+  const replacementMiners = Array.isArray(item.replacementMiners) ? item.replacementMiners : [];
+
+  return (
+    <li className="suggestion-item">
+      <div className="suggestion-line">
+        <span className="suggestion-rank">{index + 1}.</span>
+        <div className="suggestion-block">
+          <span className="suggestion-label">Buy</span>
+          <div className="suggestion-value suggestion-buy-list">
+            {purchaseMiners.map((miner, minerIndex) => (
+              <MinerCard
+                key={`${miner.id || miner.name}-${minerIndex}`}
+                miner={miner}
+                tone="buy"
+                displayUnit={displayUnit}
+              />
+            ))}
+          </div>
+          <span className="suggestion-label suggestion-label-remove">Remove</span>
+          <div className="suggestion-value">
+            {replacementMiners.length > 0 ? (
+              <div className="suggestion-remove-list">
+                {replacementMiners.map((miner, minerIndex) => (
+                  <MinerCard
+                    key={`${miner.id || miner.name}-${minerIndex}`}
+                    miner={miner}
+                    tone="remove"
+                    displayUnit={displayUnit}
+                  />
+                ))}
+              </div>
+            ) : (
+              item.replaceText
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="suggestion-metrics">
+        <span>Price: {formatMarketValue(item.price, 2)} {item.currency || "RLT"}</span>
+        <span>Gain: +{formatPowerFromPhs(item.gainPower, displayUnit)}</span>
+        <span>
+          Gain / RLT: {Number.isFinite(item.gainPerPrice) ? formatPowerFromPhs(item.gainPerPrice, displayUnit) : "-"}
+        </span>
+      </div>
+    </li>
+  );
+}
+
+function SuggestionGroup({ title, items, displayUnit, emptyText }) {
+  return (
+    <div className="suggestion-group">
+      <div className="suggestion-title">{title}</div>
+      <ol className="suggestion-list">
+        {items.length > 0 ? (
+          items.map((item, index) => (
+            <SuggestionItem
+              key={`${item.bundleKey || item.offerKey || item.name}-${index}`}
+              item={item}
+              index={index}
+              displayUnit={displayUnit}
+            />
+          ))
+        ) : (
+          <li className="muted">{emptyText}</li>
+        )}
+      </ol>
+    </div>
+  );
+}
+
 function UpgradeSuggestions({ recommendations, displayUnit }) {
-  const items = recommendations.upgradeItems.slice(0, 12);
-  if (items.length === 0) {
+  const cheaperItems = Array.isArray(recommendations.cheaperUpgradeItems) ? recommendations.cheaperUpgradeItems : [];
+  const maxPowerItems = Array.isArray(recommendations.maxPowerUpgradeItems) ? recommendations.maxPowerUpgradeItems : [];
+
+  if (cheaperItems.length === 0 && maxPowerItems.length === 0) {
     return (
       <div id="roomReplacementSuggestions" className="room-replacement-suggestions muted">
         Replacement suggestions will appear here after finding market options.
@@ -10,26 +171,41 @@ function UpgradeSuggestions({ recommendations, displayUnit }) {
     );
   }
 
+  const budgetLabel = buildBudgetLabel(recommendations);
+
   return (
     <div id="roomReplacementSuggestions" className="room-replacement-suggestions">
-      {items.map((item, index) => (
-        <article key={`${item.name}-${index}`} className="suggestion-line">
-          <div className="suggestion-rank">{index + 1}</div>
-          <div className="suggestion-copy">
-            <div className="suggestion-title">{item.name}</div>
-            <div className="suggestion-subtitle">
-              Gain {formatPowerFromPhs(item.gainPower, displayUnit)} for {formatMarketValue(item.price, 2)} RLT
-            </div>
-            <div className="suggestion-subtitle">Replace: {item.replaceText}</div>
-          </div>
-        </article>
-      ))}
+      <SuggestionGroup
+        title={`Cheaper upgrades (${budgetLabel})`}
+        items={cheaperItems}
+        displayUnit={displayUnit}
+        emptyText="No upgrade suggestions."
+      />
+      <SuggestionGroup
+        title={`Maximum power within budget (${budgetLabel})`}
+        items={maxPowerItems}
+        displayUnit={displayUnit}
+        emptyText="No power suggestions."
+      />
+    </div>
+  );
+}
+
+function MinerCell({ miner, subtitle }) {
+  return (
+    <div className="market-miner-cell">
+      <MinerVisual miner={miner} />
+      <div className="market-miner-copy">
+        <div>{miner.name}</div>
+        {subtitle ? <div className="market-miner-subcopy">{subtitle}</div> : null}
+      </div>
     </div>
   );
 }
 
 function RoomMinersTable({ market, recommendations, displayUnit, onShowMore }) {
   const rows = recommendations.roomMinersSorted.slice(0, market.visibleRoomMinersCount);
+
   return (
     <>
       <div className="market-sort-row">
@@ -80,7 +256,9 @@ function RoomMinersTable({ market, recommendations, displayUnit, onShowMore }) {
               rows.map((miner, index) => (
                 <tr key={miner.id}>
                   <td>{index + 1}</td>
-                  <td>{miner.name}</td>
+                  <td>
+                    <MinerCell miner={miner} subtitle={buildMinerMeta(miner)} />
+                  </td>
                   <td>{formatPowerFromPhs(miner.power, displayUnit)}</td>
                   <td>{formatMarketValue(miner.bonusPercent, 2)}%</td>
                   <td>{miner.width || "-"}</td>
@@ -107,6 +285,7 @@ function RoomMinersTable({ market, recommendations, displayUnit, onShowMore }) {
 
 function MarketResultsTable({ market, recommendations, displayUnit, onShowMore }) {
   const rows = recommendations.items.slice(0, market.visibleMarketResultsCount);
+
   return (
     <>
       <div className="market-sort-row">
@@ -145,18 +324,30 @@ function MarketResultsTable({ market, recommendations, displayUnit, onShowMore }
                 <td colSpan="8" className="muted">Best market candidates will appear here after loading.</td>
               </tr>
             ) : (
-              rows.map((miner, index) => (
-                <tr key={`${miner.name}-${index}`}>
-                  <td>{index + 1}</td>
-                  <td>{miner.name}</td>
-                  <td>{formatMarketValue(miner.price, 2)}</td>
-                  <td>{formatPowerFromPhs(miner.power, displayUnit)}</td>
-                  <td>{formatMarketValue(miner.bonusPercent, 2)}%</td>
-                  <td>{miner.width || "-"}</td>
-                  <td>{formatPowerFromPhs(miner.gainPower, displayUnit)}</td>
-                  <td>{Number.isFinite(miner.gainPerPrice) ? formatPowerFromPhs(miner.gainPerPrice, displayUnit) : "-"}</td>
-                </tr>
-              ))
+              rows.map((miner, index) => {
+                const leadMiner =
+                  Array.isArray(miner.purchaseMiners) && miner.purchaseMiners.length > 0
+                    ? miner.purchaseMiners[0]
+                    : miner;
+                const subtitle = miner.purchaseCount > 1
+                  ? `Bundle of ${miner.purchaseCount}: ${miner.purchaseMiners.map((entry) => entry.name).join(" + ")}`
+                  : buildMinerMeta(leadMiner);
+
+                return (
+                  <tr key={`${miner.bundleKey || miner.offerKey || miner.name}-${index}`}>
+                    <td>{index + 1}</td>
+                    <td>
+                      <MinerCell miner={leadMiner} subtitle={subtitle} />
+                    </td>
+                    <td>{formatMarketValue(miner.price, 2)}</td>
+                    <td>{formatPowerFromPhs(miner.power, displayUnit)}</td>
+                    <td>{formatMarketValue(miner.bonusPercent, 2)}%</td>
+                    <td>{miner.widthDisplay || miner.width || "-"}</td>
+                    <td>{formatPowerFromPhs(miner.gainPower, displayUnit)}</td>
+                    <td>{Number.isFinite(miner.gainPerPrice) ? formatPowerFromPhs(miner.gainPerPrice, displayUnit) : "-"}</td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

@@ -3278,14 +3278,30 @@ async function scanMarketplaceBuyFirstOffers(progress = null, options = {}) {
             getByPath(row, "product.power"),
           ]);
 
-          const bonusPercent = firstFiniteNumber([
+          const directBonusPercent = firstFiniteNumber([
+            row.miner_bonus,
             row.percent_bonus,
             row.bonus_percent,
             row.bonus,
+            getByPath(row, "price.miner_bonus"),
+            getByPath(row, "item.miner_bonus"),
             getByPath(row, "item.percent_bonus"),
+            getByPath(row, "item.bonus_percent"),
+            getByPath(row, "item_info.miner_bonus"),
             getByPath(row, "item_info.percent_bonus"),
+            getByPath(row, "product.miner_bonus"),
             getByPath(row, "product.percent_bonus"),
+            getByPath(row, "product.bonus_percent"),
           ]);
+          const nestedBonusPercent = firstFiniteNumber([
+            getByPath(row, "bonus.power_percent"),
+            getByPath(row, "item.bonus.power_percent"),
+            getByPath(row, "item_info.bonus.power_percent"),
+            getByPath(row, "product.bonus.power_percent"),
+          ]);
+          const bonusPercent = Number.isFinite(directBonusPercent)
+            ? directBonusPercent / 100
+            : (Number.isFinite(nestedBonusPercent) ? nestedBonusPercent / 100 : 0);
 
           return {
             id: String(id || ""),
@@ -3712,6 +3728,13 @@ async function scanMarketplaceBuyInteractive(progress = null, options = {}) {
           return NaN;
         };
 
+        const parseBonusFromText = (text) => {
+          if (!text) return NaN;
+          const match = String(text).match(/(\\d[\\d\\s.,]*)\\s*%/i);
+          if (!match) return NaN;
+          return parseNumber(match[1]);
+        };
+
         const normalizeImageUrl = (value) => {
           if (!value) return "";
           const src = String(value).trim();
@@ -3876,6 +3899,7 @@ async function scanMarketplaceBuyInteractive(progress = null, options = {}) {
 
             const power = parsePowerFromText(text);
             const price = parsePriceFromText(text);
+            const bonusPercent = parseBonusFromText(text);
             if (!Number.isFinite(power) || !Number.isFinite(price) || power <= 0 || price <= 0) return;
 
             const nameCandidate =
@@ -3898,7 +3922,7 @@ async function scanMarketplaceBuyInteractive(progress = null, options = {}) {
               name,
               price,
               power,
-              bonus_percent: 0,
+              bonus_percent: Number.isFinite(bonusPercent) ? bonusPercent : 0,
               currency: "RLT",
               image_url: pickBestImageFromElement(element),
               source: "marketplace-buy-interactive-dom",
@@ -4045,14 +4069,30 @@ async function scanMarketplaceBuyInteractive(progress = null, options = {}) {
             getByPath(row, "product.power"),
           ]);
 
-          const bonusPercent = firstFinite([
+          const directBonusPercent = firstFinite([
+            row.miner_bonus,
             row.percent_bonus,
             row.bonus_percent,
             row.bonus,
+            getByPath(row, "price.miner_bonus"),
+            getByPath(row, "item.miner_bonus"),
             getByPath(row, "item.percent_bonus"),
+            getByPath(row, "item.bonus_percent"),
+            getByPath(row, "item_info.miner_bonus"),
             getByPath(row, "item_info.percent_bonus"),
+            getByPath(row, "product.miner_bonus"),
             getByPath(row, "product.percent_bonus"),
+            getByPath(row, "product.bonus_percent"),
           ]);
+          const nestedBonusPercent = firstFinite([
+            getByPath(row, "bonus.power_percent"),
+            getByPath(row, "item.bonus.power_percent"),
+            getByPath(row, "item_info.bonus.power_percent"),
+            getByPath(row, "product.bonus.power_percent"),
+          ]);
+          const bonusPercent = Number.isFinite(directBonusPercent)
+            ? directBonusPercent / 100
+            : (Number.isFinite(nestedBonusPercent) ? nestedBonusPercent / 100 : 0);
 
           return {
             id: String(id || ""),

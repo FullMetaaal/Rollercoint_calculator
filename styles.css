@@ -1047,7 +1047,7 @@ tbody tr:hover {
 }
 
 .suggestion-miner-visual .market-miner-thumb {
-  transform: translateY(-50px);
+  transform: none;
 }
 
 .suggestion-miner-visual .market-miner-level-badge {
