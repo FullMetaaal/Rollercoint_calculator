@@ -2919,10 +2919,11 @@ function mergeMarketMinerCatalog(existingCatalog, scannedMiners, options = {}) {
 
     const existingPrice = Number(existingEntry.price);
     const scannedPrice = Number(scannedEntry.price);
-    const shouldReplacePrice =
-      Number.isFinite(scannedPrice) &&
+    const hasScannedPrice = Number.isFinite(scannedPrice);
+    const shouldUpdateBestPriceSeenAt =
+      hasScannedPrice &&
       (!Number.isFinite(existingPrice) || scannedPrice < existingPrice - 1e-9);
-    const preferredEntry = shouldReplacePrice ? scannedEntry : existingEntry;
+    const preferredEntry = hasScannedPrice ? scannedEntry : existingEntry;
     nextMap.set(variantKey, finalizeMarketCatalogMiner({
       ...existingEntry,
       ...preferredEntry,
@@ -2937,8 +2938,8 @@ function mergeMarketMinerCatalog(existingCatalog, scannedMiners, options = {}) {
       lastQuickSeenAt: now,
       lastFullSeenAt: existingEntry.lastFullSeenAt,
       lastPriceRefreshAt: now,
-      bestPriceSeenAt: shouldReplacePrice ? now : existingEntry.bestPriceSeenAt || now,
-      price: shouldReplacePrice ? scannedEntry.price : existingEntry.price,
+      bestPriceSeenAt: shouldUpdateBestPriceSeenAt ? now : existingEntry.bestPriceSeenAt || now,
+      price: hasScannedPrice ? scannedEntry.price : existingEntry.price,
     }, now));
   });
 
