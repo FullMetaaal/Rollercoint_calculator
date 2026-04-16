@@ -55,6 +55,20 @@
           </div>
         </header>
 
+        <div class="auth-banner" id="authBanner">
+          <div class="auth-toggle auth-checking" id="authTokenIndicator" aria-hidden="true">
+            <span class="auth-toggle-knob"></span>
+          </div>
+          <div class="auth-meta">
+            <div class="auth-title">RollerCoin Auth</div>
+            <div class="auth-subtitle" id="authTokenMessage">Checking session...</div>
+          </div>
+          <div class="auth-actions">
+            <button id="rollercoinLoginBtn" type="button" class="ghost">Login to RollerCoin</button>
+            <button id="authActionBtn" type="button" class="ghost">Check auth</button>
+          </div>
+        </div>
+
         <section class="card current-system-card" id="currentSystemSection">
           <div class="workspace-section-heading">
             <div>
@@ -211,20 +225,6 @@
             aria-labelledby="marketTabBtn"
           >
             <section class="card card-market" id="marketCard">
-              <div class="auth-banner" id="authBanner">
-                <div class="auth-toggle auth-checking" id="authTokenIndicator" aria-hidden="true">
-                  <span class="auth-toggle-knob"></span>
-                </div>
-                <div class="auth-meta">
-                  <div class="auth-title">RollerCoin Auth</div>
-                  <div class="auth-subtitle" id="authTokenMessage">Checking session...</div>
-                </div>
-                <div class="auth-actions">
-                  <button id="rollercoinLoginBtn" type="button" class="ghost">Login to RollerCoin</button>
-                  <button id="authActionBtn" type="button" class="ghost">Check auth</button>
-                </div>
-              </div>
-
               <div class="workspace-section-heading market-heading">
                 <div>
                   <p class="panel-eyebrow">Scanner</p>

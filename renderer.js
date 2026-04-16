@@ -1013,7 +1013,16 @@ function restoreMarketMinersCache() {
     const rawCatalog =
       Array.isArray(payload?.catalog) ? payload.catalog : Array.isArray(payload?.miners) ? payload.miners : [];
     const normalizedCatalog = normalizeMarketMinerCatalog(rawCatalog);
-    const activeMiners = buildActiveMarketMinersFromCatalog(normalizedCatalog);
+    const restoredSourceInfo = normalizeMarketSourceInfo({
+      ...(payload?.sourceInfo || {}),
+      sourcePath: payload?.sourceInfo?.sourcePath || "disk-cache",
+      loadedAt: payload?.savedAt || payload?.sourceInfo?.loadedAt || Date.now(),
+      catalogCount: normalizedCatalog.length,
+      activeCount: 0,
+      cacheRestored: true,
+      cacheFilePath: filePath,
+    }, normalizedCatalog.length);
+    const activeMiners = buildActiveMarketMinersFromCatalog(normalizedCatalog, restoredSourceInfo);
     if (normalizedCatalog.length === 0 || activeMiners.length === 0) {
       return false;
     }
@@ -1021,13 +1030,8 @@ function restoreMarketMinersCache() {
     marketMinerCatalogCache = normalizedCatalog;
     marketMinersCache = activeMiners;
     marketSourceInfo = normalizeMarketSourceInfo({
-      ...(payload?.sourceInfo || {}),
-      sourcePath: payload?.sourceInfo?.sourcePath || "disk-cache",
-      loadedAt: payload?.savedAt || payload?.sourceInfo?.loadedAt || Date.now(),
-      catalogCount: normalizedCatalog.length,
+      ...restoredSourceInfo,
       activeCount: activeMiners.length,
-      cacheRestored: true,
-      cacheFilePath: filePath,
     }, activeMiners.length);
     return true;
   } catch (error) {
@@ -2839,6 +2843,14 @@ function normalizeMarketMinerCatalog(entries) {
   });
 }
 
+function getMarketActivePriceFreshnessCutoff(sourceInfo = marketSourceInfo) {
+  const quickRefreshedAt = normalizeMarketTimestamp(sourceInfo?.quickRefreshedAt, null);
+  const fullRefreshedAt = normalizeMarketTimestamp(sourceInfo?.fullRefreshedAt, null);
+  if (!quickRefreshedAt) return null;
+  if (fullRefreshedAt && fullRefreshedAt >= quickRefreshedAt) return null;
+  return quickRefreshedAt;
+}
+
 function aggregateMarketMinersByVariant(miners, fallbackNow = Date.now()) {
   const aggregated = new Map();
   if (!Array.isArray(miners)) return aggregated;
@@ -2974,13 +2986,15 @@ function mergeMarketMinerCatalog(existingCatalog, scannedMiners, options = {}) {
 
   return {
     catalog: nextCatalog,
-    activeMiners: buildActiveMarketMinersFromCatalog(nextCatalog),
+    activeMiners: buildActiveMarketMinersFromCatalog(nextCatalog, currentSourceInfo),
     sourceInfo: currentSourceInfo,
   };
 }
 
-function buildActiveMarketMinersFromCatalog(catalog) {
+function buildActiveMarketMinersFromCatalog(catalog, sourceInfo = marketSourceInfo) {
+  const freshnessCutoff = getMarketActivePriceFreshnessCutoff(sourceInfo);
   return normalizeMarketMinerCatalog(catalog).filter((miner) =>
+    (!freshnessCutoff || normalizeMarketTimestamp(miner?.lastPriceRefreshAt, 0) >= freshnessCutoff) &&
     Number.isFinite(Number(miner?.price)) &&
     Number(miner.price) > 0 &&
     Number.isFinite(Number(miner?.power)) &&

@@ -513,7 +513,7 @@ button.ghost:hover {
   align-items: center;
   gap: 14px;
   padding: 16px 18px;
-  margin-bottom: 18px;
+  margin: 22px 24px 0;
   border-radius: 18px;
   border: 1px solid rgba(197, 208, 232, 0.95);
   background: linear-gradient(180deg, rgba(247, 249, 255, 0.98), rgba(255, 255, 255, 0.98));
@@ -1192,6 +1192,10 @@ tbody tr:hover {
     padding-top: 18px;
     padding-bottom: 18px;
     border-radius: 18px;
+  }
+
+  .auth-banner {
+    margin: 14px 14px 0;
   }
 
   .workspace-shell {
