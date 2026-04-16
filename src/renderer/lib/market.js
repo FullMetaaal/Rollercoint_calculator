@@ -365,6 +365,12 @@ function extractBonusPercent(item, options = {}) {
     getByPath(item, "item_info.miner_bonus"),
     getByPath(item, "item_info.percent_bonus"),
     getByPath(item, "item_info.bonus_percent"),
+    getByPath(item, "miner.miner_bonus"),
+    getByPath(item, "miner.percent_bonus"),
+    getByPath(item, "miner.bonus_percent"),
+    getByPath(item, "sale.miner_bonus"),
+    getByPath(item, "sale.percent_bonus"),
+    getByPath(item, "sale.bonus_percent"),
     getByPath(item, "product.miner_bonus"),
     getByPath(item, "product.percent_bonus"),
     getByPath(item, "product.bonus_percent"),
@@ -394,6 +400,8 @@ function extractBonusPercent(item, options = {}) {
     getByPath(item, "bonus.power_percent"),
     getByPath(item, "item.bonus.power_percent"),
     getByPath(item, "item_info.bonus.power_percent"),
+    getByPath(item, "miner.bonus.power_percent"),
+    getByPath(item, "sale.bonus.power_percent"),
     getByPath(item, "product.bonus.power_percent"),
   ]);
   if (!Number.isFinite(nestedBonus)) return 0;
