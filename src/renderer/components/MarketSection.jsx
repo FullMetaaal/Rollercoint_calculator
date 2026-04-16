@@ -1,0 +1,309 @@
+import { formatMarketValue, formatPowerFromPhs } from "../lib/power";
+
+function UpgradeSuggestions({ recommendations, displayUnit }) {
+  const items = recommendations.upgradeItems.slice(0, 12);
+  if (items.length === 0) {
+    return (
+      <div id="roomReplacementSuggestions" className="room-replacement-suggestions muted">
+        Replacement suggestions will appear here after finding market options.
+      </div>
+    );
+  }
+
+  return (
+    <div id="roomReplacementSuggestions" className="room-replacement-suggestions">
+      {items.map((item, index) => (
+        <article key={`${item.name}-${index}`} className="suggestion-line">
+          <div className="suggestion-rank">{index + 1}</div>
+          <div className="suggestion-copy">
+            <div className="suggestion-title">{item.name}</div>
+            <div className="suggestion-subtitle">
+              Gain {formatPowerFromPhs(item.gainPower, displayUnit)} for {formatMarketValue(item.price, 2)} RLT
+            </div>
+            <div className="suggestion-subtitle">Replace: {item.replaceText}</div>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function RoomMinersTable({ market, recommendations, displayUnit, onShowMore }) {
+  const rows = recommendations.roomMinersSorted.slice(0, market.visibleRoomMinersCount);
+  return (
+    <>
+      <div className="market-sort-row">
+        <label>
+          Search room miners
+          <input
+            id="roomMinersSearch"
+            type="text"
+            placeholder="name, L2, width 2..."
+            value={market.settings.roomMinersSearch}
+            onChange={(event) => market.actions.updateMarketSetting("roomMinersSearch", event.target.value)}
+          />
+        </label>
+        <label>
+          Sort room miners by
+          <select
+            id="roomMinersSortMode"
+            value={market.settings.roomMinersSortMode}
+            onChange={(event) => market.actions.updateMarketSetting("roomMinersSortMode", event.target.value)}
+          >
+            <option value="powerDesc">Power (high to low)</option>
+            <option value="bonusDesc">Bonus (high to low)</option>
+            <option value="widthAsc">Width (small to large)</option>
+            <option value="nameAsc">Name (A-Z)</option>
+          </select>
+        </label>
+        <span id="roomMinersCountInfo" className="muted">
+          {recommendations.roomMinersSorted.length} total
+        </span>
+      </div>
+      <div className="table-shell">
+        <table id="roomMinersTable" className="candidates-result-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Room miner</th>
+              <th id="roomMinersPowerHeader">Power ({displayUnit})</th>
+              <th>Bonus (%)</th>
+              <th>Width</th>
+            </tr>
+          </thead>
+          <tbody id="roomMinersBody">
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan="5" className="muted">Room miners will appear here after loading the current room.</td>
+              </tr>
+            ) : (
+              rows.map((miner, index) => (
+                <tr key={miner.id}>
+                  <td>{index + 1}</td>
+                  <td>{miner.name}</td>
+                  <td>{formatPowerFromPhs(miner.power, displayUnit)}</td>
+                  <td>{formatMarketValue(miner.bonusPercent, 2)}%</td>
+                  <td>{miner.width || "-"}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="table-pagination">
+        <button
+          id="showMoreRoomMinersBtn"
+          type="button"
+          className="ghost"
+          hidden={market.visibleRoomMinersCount >= recommendations.roomMinersSorted.length}
+          onClick={onShowMore}
+        >
+          Show 25 more
+        </button>
+      </div>
+    </>
+  );
+}
+
+function MarketResultsTable({ market, recommendations, displayUnit, onShowMore }) {
+  const rows = recommendations.items.slice(0, market.visibleMarketResultsCount);
+  return (
+    <>
+      <div className="market-sort-row">
+        <label>
+          Sort market results by
+          <select
+            id="marketSortMode"
+            value={market.settings.sortMode}
+            onChange={(event) => market.actions.updateMarketSetting("sortMode", event.target.value)}
+          >
+            <option value="gainPerPrice">Gain / RLT</option>
+            <option id="marketSortGainPowerOption" value="gainPower">Gain ({displayUnit})</option>
+          </select>
+        </label>
+        <span id="marketResultsCountInfo" className="muted">
+          {recommendations.items.length} visible recommendations
+        </span>
+      </div>
+      <div className="table-shell table-shell-large">
+        <table id="marketResultsTable" className="candidates-result-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Miner</th>
+              <th>Price</th>
+              <th id="marketResultsPowerHeader">Power ({displayUnit})</th>
+              <th>Bonus (%)</th>
+              <th>Width</th>
+              <th id="marketResultsGainHeader">Gain ({displayUnit})</th>
+              <th id="marketResultsGainPerPriceHeader">Gain / RLT ({displayUnit})</th>
+            </tr>
+          </thead>
+          <tbody id="marketResultsBody">
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan="8" className="muted">Best market candidates will appear here after loading.</td>
+              </tr>
+            ) : (
+              rows.map((miner, index) => (
+                <tr key={`${miner.name}-${index}`}>
+                  <td>{index + 1}</td>
+                  <td>{miner.name}</td>
+                  <td>{formatMarketValue(miner.price, 2)}</td>
+                  <td>{formatPowerFromPhs(miner.power, displayUnit)}</td>
+                  <td>{formatMarketValue(miner.bonusPercent, 2)}%</td>
+                  <td>{miner.width || "-"}</td>
+                  <td>{formatPowerFromPhs(miner.gainPower, displayUnit)}</td>
+                  <td>{Number.isFinite(miner.gainPerPrice) ? formatPowerFromPhs(miner.gainPerPrice, displayUnit) : "-"}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="table-pagination">
+        <button
+          id="showMoreMarketResultsBtn"
+          type="button"
+          className="ghost"
+          hidden={market.visibleMarketResultsCount >= recommendations.items.length}
+          onClick={onShowMore}
+        >
+          Show 25 more
+        </button>
+      </div>
+    </>
+  );
+}
+
+function MarketLogs({ logs }) {
+  return (
+    <div className="market-logs">
+      <div className="header-row">
+        <h3>Load Logs</h3>
+      </div>
+      <pre id="marketLogsOutput" className="market-logs-output muted">
+        {logs.length === 0 ? 'Logs will appear here after clicking "Load miners from market".' : logs.join("\n")}
+      </pre>
+    </div>
+  );
+}
+
+export function MarketSection({ market, recommendations, displayUnit, actions }) {
+  return (
+    <section className="card card-market" id="marketCard">
+      <div className="workspace-section-heading market-heading">
+        <div>
+          <p className="panel-eyebrow">Scanner</p>
+          <h2>Market Scanner (RollerCoin)</h2>
+          <p className="section-subtitle">Load live market data, inspect your room, and generate replacement suggestions.</p>
+        </div>
+      </div>
+
+      <input id="rollercoinCookie" type="hidden" value={market.cookieHeader} readOnly />
+
+      <div className="market-top-stack">
+        <p className="inline-hint section-frame section-frame-copy">
+          RollerCoin session and current room are detected automatically after login.
+        </p>
+
+        <div className="grid-3 section-frame">
+          <label>
+            Replace by width
+            <select id="marketRoomWidthMode" value={market.settings.roomWidthMode} onChange={(event) => actions.updateMarketSetting("roomWidthMode", event.target.value)}>
+              <option value="any">Any width</option>
+              <option value="1">Small (1)</option>
+              <option value="2">Large (2)</option>
+            </select>
+          </label>
+          <label>
+            Room miners
+            <button id="loadRoomMinersBtn" type="button" className="ghost" onClick={actions.loadRoomMiners} disabled={market.roomMinersLoadInFlight}>
+              {market.roomMinersLoadInFlight ? "Loading..." : "Load room miners"}
+            </button>
+          </label>
+          <label>
+            Recommendation mode
+            <select id="marketRecommendationMode" value={market.settings.recommendationMode} onChange={(event) => actions.updateMarketSetting("recommendationMode", event.target.value)}>
+              <option value="single">Single purchase</option>
+              <option value="budget">Budget combinations</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="grid-3 section-frame">
+          <label>
+            Replacement behavior
+            <select id="marketReplacementStrategy" value={market.settings.replacementStrategy} onChange={(event) => actions.updateMarketSetting("replacementStrategy", event.target.value)}>
+              <option value="off">Off</option>
+              <option value="strict">Strict same width</option>
+              <option value="flex">Flexible slots</option>
+            </select>
+          </label>
+        </div>
+
+        <p className="inline-hint section-frame section-frame-copy">
+          Flexible slots: one width 2 miner can be replaced by two width 1 miners.
+        </p>
+
+        <div className="grid-3 section-frame">
+          <label>
+            Budget (RLT)
+            <input id="marketBudget" type="number" min="0" step="0.01" placeholder="e.g. 1000" value={market.settings.budget} onChange={(event) => actions.updateMarketSetting("budget", event.target.value)} />
+          </label>
+          <label>
+            Max price per miner (RLT)
+            <input id="marketMaxMinerPrice" type="number" min="0" step="0.01" placeholder="optional" value={market.settings.maxMinerPrice} onChange={(event) => actions.updateMarketSetting("maxMinerPrice", event.target.value)} />
+          </label>
+          <label>
+            Top results
+            <input id="marketTopN" type="number" min="1" step="1" placeholder="empty = all" value={market.settings.topN} onChange={(event) => actions.updateMarketSetting("topN", event.target.value)} />
+          </label>
+        </div>
+
+        <div className="actions market-actions section-frame">
+          <button id="loadMarketMinersBtn" type="button" className="ghost" onClick={actions.loadMarketMiners} disabled={market.marketLoading}>
+            {market.marketLoading ? "Loading..." : "Load miners from market"}
+          </button>
+          <button id="findBestMarketBtn" type="button" className="primary" onClick={actions.findBestMarketOptions}>
+            Find best options
+          </button>
+        </div>
+      </div>
+
+      <div className="status-stack">
+        <p id="marketStatus" className="muted status-line">{market.marketStatus}</p>
+        <p id="marketSummary" className="muted status-line">{recommendations.marketSummary || market.marketSummary}</p>
+        <p id="roomMinersStatus" className="muted status-line">{market.roomMinersStatus}</p>
+      </div>
+
+      <div className="market-subtabs">
+        <div className="tab-list tab-list-compact" role="tablist" aria-label="Market views">
+          <button id="marketUpgradesTabBtn" type="button" className={`tab-button ${market.marketViewTab === "upgrades" ? "is-active" : ""}`} onClick={() => actions.setMarketViewTab("upgrades")}>Upgrades</button>
+          <button id="marketRoomMinersTabBtn" type="button" className={`tab-button ${market.marketViewTab === "roomMiners" ? "is-active" : ""}`} onClick={() => actions.setMarketViewTab("roomMiners")}>Room Miners</button>
+          <button id="marketResultsTabBtn" type="button" className={`tab-button ${market.marketViewTab === "results" ? "is-active" : ""}`} onClick={() => actions.setMarketViewTab("results")}>Market Results</button>
+          <button id="marketLogsTabBtn" type="button" className={`tab-button ${market.marketViewTab === "logs" ? "is-active" : ""}`} onClick={() => actions.setMarketViewTab("logs")}>Load Logs</button>
+        </div>
+
+        {market.marketViewTab === "upgrades" && <UpgradeSuggestions recommendations={recommendations} displayUnit={displayUnit} />}
+        {market.marketViewTab === "roomMiners" && (
+          <RoomMinersTable
+            market={{ ...market, actions }}
+            recommendations={recommendations}
+            displayUnit={displayUnit}
+            onShowMore={actions.showMoreRoomMiners}
+          />
+        )}
+        {market.marketViewTab === "results" && (
+          <MarketResultsTable
+            market={{ ...market, actions }}
+            recommendations={recommendations}
+            displayUnit={displayUnit}
+            onShowMore={actions.showMoreMarketResults}
+          />
+        )}
+        {market.marketViewTab === "logs" && <MarketLogs logs={market.marketLogs} />}
+      </div>
+    </section>
+  );
+}

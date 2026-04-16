@@ -695,6 +695,11 @@ tbody tr:hover {
   border-bottom-color: rgba(29, 139, 79, 0.14);
 }
 
+.history-growth-column {
+  color: var(--success);
+  font-weight: 700;
+}
+
 .market-miner-cell {
   display: flex;
   align-items: center;

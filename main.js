@@ -477,6 +477,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
+    show: false,
+    backgroundColor: "#eef3ff",
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -500,6 +502,12 @@ function createWindow() {
     writeStartupLog("Main window finished loading.");
   });
 
+  mainWindow.once("ready-to-show", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+    }
+  });
+
   mainWindow.webContents.on(
     "did-fail-load",
     (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -520,9 +528,57 @@ function createWindow() {
     writeStartupLog("Main window webContents destroyed.");
   });
 
-  mainWindow.loadFile(path.join(__dirname, "index.html")).catch((error) => {
+  const rendererEntryPath = path.join(__dirname, "dist", "renderer", "index.html");
+  if (!fs.existsSync(rendererEntryPath)) {
+    const errorHtml = encodeURIComponent(`
+      <!doctype html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <title>Renderer build missing</title>
+          <style>
+            body {
+              margin: 0;
+              padding: 32px;
+              font-family: Segoe UI, sans-serif;
+              background: #eef3ff;
+              color: #23304f;
+            }
+            .card {
+              max-width: 760px;
+              margin: 0 auto;
+              padding: 24px 28px;
+              border-radius: 18px;
+              background: #fff;
+              box-shadow: 0 12px 40px rgba(34, 58, 119, 0.14);
+            }
+            code {
+              padding: 2px 6px;
+              border-radius: 8px;
+              background: #edf2ff;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>Renderer build was not found</h1>
+            <p>Run <code>npm run build:renderer</code> or start the app with <code>npm start</code>.</p>
+          </div>
+        </body>
+      </html>
+    `);
+    mainWindow.loadURL(`data:text/html;charset=utf-8,${errorHtml}`).catch((error) => {
+      writeStartupLog("loadURL fallback threw an error.", {
+        message: error?.message || String(error),
+      });
+    });
+    return;
+  }
+
+  mainWindow.loadFile(rendererEntryPath).catch((error) => {
     writeStartupLog("loadFile threw an error.", {
       message: error?.message || String(error),
+      rendererEntryPath,
     });
   });
 }
