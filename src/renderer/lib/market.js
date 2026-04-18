@@ -99,6 +99,64 @@ function buildMinerLevelBadgeUrl(level) {
   return `https://rollercoin.com/static/img/storage/rarity_icons/level_${normalizedLevel}.png?v=1.0.0`;
 }
 
+function normalizeMinerIdentityName(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function getMinerDisplayLevelValue(miner) {
+  const level = firstFinite([miner?.level]);
+  if (!Number.isFinite(level) || level <= 0) return null;
+  return Math.floor(level);
+}
+
+function getMinerWidthIdentityValue(miner) {
+  const width = firstFinite([miner?.width]);
+  if (!Number.isFinite(width) || width <= 0) return null;
+  return Math.floor(width);
+}
+
+function getMinerPowerIdentityValue(miner) {
+  const power = firstFinite([miner?.power]);
+  if (!Number.isFinite(power) || power <= 0) return null;
+  return Math.round(power * 1_000_000);
+}
+
+function getMinerBonusIdentityValue(miner) {
+  const bonusPercent = firstFinite([miner?.bonusPercent]);
+  if (!Number.isFinite(bonusPercent) || bonusPercent < 0) return null;
+  return Math.round(bonusPercent * 100);
+}
+
+function getMinerSpecsIdentityKey(miner) {
+  const name = normalizeMinerIdentityName(miner?.name);
+  if (!name) return "";
+
+  const width = getMinerWidthIdentityValue(miner);
+  const power = getMinerPowerIdentityValue(miner);
+  const bonusPercent = getMinerBonusIdentityValue(miner);
+  if (width === null || power === null || bonusPercent === null) return "";
+
+  return `${name}::w${width}::p${power}::b${bonusPercent}`;
+}
+
+function getMinerIdentityKeys(miner) {
+  const name = normalizeMinerIdentityName(miner?.name);
+  if (!name) return [];
+
+  const keys = new Set();
+  const level = getMinerDisplayLevelValue(miner);
+  if (level !== null) {
+    keys.add(`${name}::l${level}`);
+  }
+
+  const specsKey = getMinerSpecsIdentityKey(miner);
+  if (specsKey) {
+    keys.add(specsKey);
+  }
+
+  return [...keys];
+}
+
 function getMinerCandidateSources(rawItem, options = {}) {
   const roomRaw = options.roomRaw === true || rawItem?.__roomConfigRaw === true;
   const saleOrdersRaw = options.saleOrdersRaw === true || rawItem?.__saleOrdersRaw === true;
@@ -913,10 +971,48 @@ export function subscribeMarketProgress(listener) {
 }
 
 export function getRoomMinerOwnershipKey(miner) {
-  return [
-    String(miner?.name || "").trim().toLowerCase().replace(/\s+/g, " "),
-    Number.isFinite(Number(miner?.level)) ? Math.floor(Number(miner.level)) : 0,
-  ].join("::");
+  return getMinerIdentityKeys(miner)[0] || "";
+}
+
+function hasOwnedMinerMatch(miner, ownedMinerKeys) {
+  if (!(ownedMinerKeys instanceof Set) || ownedMinerKeys.size === 0) return false;
+  return getMinerIdentityKeys(miner).some((key) => ownedMinerKeys.has(key));
+}
+
+function reconcileMarketMinerLevelsWithRoomMiners(marketMiners, roomMiners) {
+  if (!Array.isArray(marketMiners) || marketMiners.length === 0) return [];
+  if (!Array.isArray(roomMiners) || roomMiners.length === 0) return [...marketMiners];
+
+  const roomMinerBySpecsKey = new Map();
+  roomMiners.forEach((miner) => {
+    const specsKey = getMinerSpecsIdentityKey(miner);
+    if (!specsKey) return;
+
+    const currentLevel = getMinerDisplayLevelValue(miner);
+    const existing = roomMinerBySpecsKey.get(specsKey);
+    const existingLevel = getMinerDisplayLevelValue(existing);
+    if (!existing || (currentLevel !== null && (existingLevel === null || currentLevel > existingLevel))) {
+      roomMinerBySpecsKey.set(specsKey, miner);
+    }
+  });
+
+  return marketMiners.map((miner) => {
+    const specsKey = getMinerSpecsIdentityKey(miner);
+    if (!specsKey) return miner;
+
+    const roomMiner = roomMinerBySpecsKey.get(specsKey);
+    if (!roomMiner) return miner;
+
+    const roomLevel = getMinerDisplayLevelValue(roomMiner);
+    const marketLevel = getMinerDisplayLevelValue(miner);
+    if (roomLevel === null || roomLevel === marketLevel) return miner;
+
+    return {
+      ...miner,
+      level: roomLevel,
+      levelBadgeUrl: buildMinerLevelBadgeUrl(roomLevel) || miner?.levelBadgeUrl || "",
+    };
+  });
 }
 
 function cloneMinerForRecommendation(miner) {
@@ -1090,7 +1186,7 @@ function buildFilteredMarketMiners({
     if (hasBudgetFilter && (!Number.isFinite(price) || price > budget)) return false;
     if (hasMaxPriceFilter && (!Number.isFinite(price) || price > maxMinerPrice)) return false;
     if (hasWidthFilter && String(miner?.width || "") !== roomWidthMode) return false;
-    if (hideOwnedRoomMiners && ownedRoomMinerKeys.has(getRoomMinerOwnershipKey(miner))) return false;
+    if (hideOwnedRoomMiners && hasOwnedMinerMatch(miner, ownedRoomMinerKeys)) return false;
     return true;
   });
 }
@@ -1658,6 +1754,7 @@ export function buildMarketRecommendations({
   marketSourceInfo,
 }) {
   const currentSystem = getCurrentSystemSnapshot(currentSystemState);
+  const reconciledMarketMiners = reconcileMarketMinerLevelsWithRoomMiners(marketMiners, roomMiners);
   const roomMinersSorted = sortRoomMinersInternal(
     roomMiners,
     marketSettings.roomMinersSortMode,
@@ -1690,12 +1787,12 @@ export function buildMarketRecommendations({
   const replacementStrategy = marketSettings.replacementStrategy === "flex" ? "flex" : "strict";
   const replacementEnabled = replacementRequested && roomMiners.length > 0;
   const replacementPendingRoomLoad = replacementRequested && roomMiners.length === 0;
-  const ownedRoomMinerKeys = new Set(roomMiners.map((miner) => getRoomMinerOwnershipKey(miner)));
-  const overlappingOwnedCount = marketMiners.filter((miner) =>
-    ownedRoomMinerKeys.has(getRoomMinerOwnershipKey(miner))).length;
+  const ownedRoomMinerKeys = new Set(roomMiners.flatMap((miner) => getMinerIdentityKeys(miner)));
+  const overlappingOwnedCount = reconciledMarketMiners.filter((miner) =>
+    hasOwnedMinerMatch(miner, ownedRoomMinerKeys)).length;
 
   const filteredMarketMiners = buildFilteredMarketMiners({
-    marketMiners,
+    marketMiners: reconciledMarketMiners,
     budget,
     maxMinerPrice,
     roomWidthMode: marketSettings.roomWidthMode,
