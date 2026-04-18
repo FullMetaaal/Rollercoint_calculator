@@ -1044,6 +1044,11 @@ tbody tr:hover {
   font-size: 12px;
 }
 
+.suggestion-miner-price {
+  font-weight: 700;
+  color: var(--text);
+}
+
 .suggestion-metrics {
   display: flex;
   gap: 12px;

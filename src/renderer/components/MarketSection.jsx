@@ -107,13 +107,21 @@ function MinerVisual({ miner, className = "" }) {
   );
 }
 
-function MinerCard({ miner, tone = "buy", displayUnit = "Ph/s" }) {
+function MinerCard({ miner, tone = "buy", displayUnit = "Ph/s", showPrice = false }) {
+  const hasPrice = showPrice && Number.isFinite(Number(miner?.price)) && Number(miner.price) > 0;
+  const currency = typeof miner?.currency === "string" && miner.currency ? miner.currency : "RLT";
+
   return (
     <div className={`suggestion-miner-card suggestion-miner-card-${tone}`}>
       <MinerVisual miner={miner} className="suggestion-miner-visual" />
       <div className="suggestion-miner-copy">
         <div className="suggestion-miner-name">{miner.name}</div>
         <div className="suggestion-miner-meta">
+          {hasPrice ? (
+            <span className="suggestion-miner-price">
+              {formatMarketValue(miner.price, 2)} {currency}
+            </span>
+          ) : null}
           <span className="positive">{formatPowerFromPhs(miner.power, displayUnit)}</span>
           <span className={Number(miner.bonusPercent) > 0 ? "positive" : "muted"}>
             {formatMarketValue(miner.bonusPercent, 2)}% bonus
@@ -130,6 +138,7 @@ function SuggestionItem({ item, index, displayUnit }) {
     ? item.purchaseMiners
     : [item];
   const replacementMiners = Array.isArray(item.replacementMiners) ? item.replacementMiners : [];
+  const showBundleMinerPrices = purchaseMiners.length > 1;
 
   return (
     <li className="suggestion-item">
@@ -144,6 +153,7 @@ function SuggestionItem({ item, index, displayUnit }) {
                 miner={miner}
                 tone="buy"
                 displayUnit={displayUnit}
+                showPrice={showBundleMinerPrices}
               />
             ))}
           </div>
