@@ -1003,7 +1003,7 @@ function reconcileMarketMinerLevelsWithRoomMiners(marketMiners, roomMiners) {
 
     const roomLevel = getMinerDisplayLevelValue(roomMiner);
     const marketLevel = getMinerDisplayLevelValue(miner);
-    if (roomLevel === null || roomLevel === marketLevel) return miner;
+    if (marketLevel !== null || roomLevel === null) return miner;
 
     return {
       ...miner,

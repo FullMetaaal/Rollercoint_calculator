@@ -2609,6 +2609,11 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
               getByPath(row, "item_info.level") ||
               getByPath(row, "product.level") ||
               null;
+            const buildLevelBadgeUrl = (rawLevel) => {
+              const numericLevel = Number(rawLevel);
+              if (!Number.isFinite(numericLevel) || numericLevel < 0) return "";
+              return `https://rollercoin.com/static/img/storage/rarity_icons/level_${Math.floor(numericLevel) + 1}.png?v=1.0.0`;
+            };
             const buildImageUrlFromFilename = (file, version, template) => {
               if (!file) return "";
               const versions = Number.isFinite(Number(version)) ? ["?v=" + Number(version)] : [""];
@@ -2662,7 +2667,7 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
                 getByPath(row, "item_info.image") ||
                 getByPath(row, "product.image") ||
                 buildImageUrlFromFilename(filename, imgVer, imageTemplateUrl),
-              level_badge_url: buildMarketLevelBadgeUrl(level),
+              level_badge_url: buildLevelBadgeUrl(level),
               source: "marketplace-buy-browser-session-api",
             };
           };
