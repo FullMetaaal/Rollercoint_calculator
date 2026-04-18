@@ -1003,8 +1003,9 @@ function buildMarketImageUrlFromFilename(filename, imgVer, templateUrl = "") {
 
 function buildMarketLevelBadgeUrl(level) {
   const numericLevel = Number(level);
-  if (!Number.isFinite(numericLevel) || numericLevel <= 0) return "";
-  return `https://rollercoin.com/static/img/storage/rarity_icons/level_${Math.floor(numericLevel)}.png?v=1.0.0`;
+  if (!Number.isFinite(numericLevel) || numericLevel < 0) return "";
+  const displayLevel = Math.floor(numericLevel) + 1;
+  return `https://rollercoin.com/static/img/storage/rarity_icons/level_${displayLevel}.png?v=1.0.0`;
 }
 
 function getByPath(obj, pathName) {
@@ -2661,10 +2662,7 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
                 getByPath(row, "item_info.image") ||
                 getByPath(row, "product.image") ||
                 buildImageUrlFromFilename(filename, imgVer, imageTemplateUrl),
-              level_badge_url:
-                Number.isFinite(Number(level)) && Number(level) > 0
-                  ? "https://rollercoin.com/static/img/storage/rarity_icons/level_" + Math.floor(Number(level)) + ".png?v=1.0.0"
-                  : "",
+              level_badge_url: buildMarketLevelBadgeUrl(level),
               source: "marketplace-buy-browser-session-api",
             };
           };

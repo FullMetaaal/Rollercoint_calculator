@@ -86,17 +86,16 @@ function firstFinite(values) {
   return NaN;
 }
 
-function normalizeMinerDisplayLevel(value) {
+function getMinerDisplayLevelFromRaw(value) {
   const parsed = firstFinite([value]);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  const level = Math.floor(parsed);
-  return level === 1 ? 2 : level;
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.floor(parsed) + 1;
 }
 
-function buildMinerLevelBadgeUrl(level) {
-  const normalizedLevel = normalizeMinerDisplayLevel(level);
-  if (!normalizedLevel) return "";
-  return `https://rollercoin.com/static/img/storage/rarity_icons/level_${normalizedLevel}.png?v=1.0.0`;
+function buildMinerLevelBadgeUrl(displayLevel) {
+  const parsed = firstFinite([displayLevel]);
+  if (!Number.isFinite(parsed) || parsed <= 0) return "";
+  return `https://rollercoin.com/static/img/storage/rarity_icons/level_${Math.floor(parsed)}.png?v=1.0.0`;
 }
 
 function normalizeMinerIdentityName(value) {
@@ -493,9 +492,8 @@ function extractMinerLevel(item, { roomRaw = false } = {}) {
     getByPath(item, "item_info.level"),
     getByPath(item, "product.level"),
   ]);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  const level = Math.floor(parsed);
-  return roomRaw ? normalizeMinerDisplayLevel(level + 1) : normalizeMinerDisplayLevel(level);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return getMinerDisplayLevelFromRaw(parsed);
 }
 
 function extractRoomPower(item) {
@@ -564,9 +562,9 @@ function buildNormalizedMinerBase(item, index, fallbackName, options = {}) {
       extractMinerLevel(candidate, { roomRaw: !options.market }) ??
       extractMinerLevel(item, { roomRaw: !options.market });
     const levelBadgeUrl =
+      buildMinerLevelBadgeUrl(level) ||
       normalizeUrl(candidate?.level_badge_url || candidate?.levelBadgeUrl) ||
-      normalizeUrl(item?.level_badge_url || item?.levelBadgeUrl) ||
-      buildMinerLevelBadgeUrl(level);
+      normalizeUrl(item?.level_badge_url || item?.levelBadgeUrl);
 
     return {
       id: String(
