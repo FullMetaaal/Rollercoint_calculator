@@ -2612,7 +2612,7 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
             const buildLevelBadgeUrl = (rawLevel) => {
               const numericLevel = Number(rawLevel);
               if (!Number.isFinite(numericLevel) || numericLevel < 0) return "";
-              return `https://rollercoin.com/static/img/storage/rarity_icons/level_${Math.floor(numericLevel) + 1}.png?v=1.0.0`;
+              return "https://rollercoin.com/static/img/storage/rarity_icons/level_" + (Math.floor(numericLevel) + 1) + ".png?v=1.0.0";
             };
             const buildImageUrlFromFilename = (file, version, template) => {
               if (!file) return "";
