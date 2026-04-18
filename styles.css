@@ -725,12 +725,22 @@ tbody tr:hover {
 
 .market-miner-level-badge {
   position: absolute;
-  right: -4px;
-  bottom: -4px;
-  width: 20px;
+  right: -6px;
+  bottom: -6px;
+  min-width: 20px;
   height: 20px;
-  object-fit: contain;
-  filter: drop-shadow(0 2px 6px rgba(67, 83, 128, 0.24));
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(28, 62, 166, 0.18);
+  background: linear-gradient(180deg, #ffffff, #e9f0ff);
+  color: var(--primary-deep);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 6px 14px rgba(67, 83, 128, 0.18);
   pointer-events: none;
 }
 

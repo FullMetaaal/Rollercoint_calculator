@@ -21,6 +21,13 @@ function buildBudgetLabel(recommendations) {
     : "Budget: not set";
 }
 
+function getMinerLevelLabel(miner) {
+  if (!Number.isFinite(Number(miner?.level)) || Number(miner.level) <= 0) {
+    return "";
+  }
+  return String(Math.floor(Number(miner.level)));
+}
+
 function MinerVisual({ miner, className = "" }) {
   const imageSources = [...new Set(
     [
@@ -37,6 +44,7 @@ function MinerVisual({ miner, className = "" }) {
 
   const currentSource = imageSources[sourceIndex] || "";
   const showImage = Boolean(currentSource) && sourceIndex < imageSources.length;
+  const levelLabel = getMinerLevelLabel(miner);
 
   return (
     <div className={`market-miner-thumb-wrap ${className}`.trim()}>
@@ -55,13 +63,10 @@ function MinerVisual({ miner, className = "" }) {
           {String(miner?.name || "M").slice(0, 1).toUpperCase()}
         </div>
       )}
-      {miner?.levelBadgeUrl ? (
-        <img
-          className="market-miner-level-badge"
-          src={miner.levelBadgeUrl}
-          alt={`Level ${miner.level || ""}`}
-          loading="lazy"
-        />
+      {levelLabel ? (
+        <span className="market-miner-level-badge" aria-label={`Level ${levelLabel}`}>
+          {levelLabel}
+        </span>
       ) : null}
     </div>
   );
