@@ -22,6 +22,7 @@ const BUDGET_COMBINATION_STATE_LIMIT = 220;
 const BUDGET_COMBINATION_RESULT_LIMIT = 160;
 const BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH = 5;
 const CACHE_FILENAME = "market-miners-cache.json";
+const MARKET_MINERS_CACHE_VERSION = 5;
 const MIN_GAIN_PHS = 0.001;
 
 export const DEFAULT_MARKET_SETTINGS = {
@@ -659,30 +660,9 @@ function mergeNormalizedMarketVariant(existingMiner, nextMiner) {
   };
 }
 
-export function normalizeMarketMiners(rawItems) {
-  const normalized = (Array.isArray(rawItems) ? rawItems : [])
-    .map((item, index) => {
-      const miner = buildNormalizedMinerBase(item, index, "Marketplace miner", { market: true });
-      const price = Number.isFinite(Number(miner?.extractedPrice))
-        ? Number(miner.extractedPrice)
-        : extractMarketPrice(item);
-      if (!miner || !Number.isFinite(price) || price <= 0) return null;
-
-      const now = Date.now();
-      const { extractedPrice, ...baseMiner } = miner;
-      return {
-        ...baseMiner,
-        sourceOfferId: miner.id,
-        price,
-        firstSeenAt: Number(item?.firstSeenAt) || now,
-        lastSeenAt: Number(item?.lastSeenAt) || now,
-        lastPriceRefreshAt: Number(item?.lastPriceRefreshAt) || now,
-      };
-    })
-    .filter(Boolean);
-
+function finalizeNormalizedMarketMiners(normalizedMiners) {
   const inferredBonusBySignature = new Map();
-  normalized.forEach((miner) => {
+  normalizedMiners.forEach((miner) => {
     const bonusPercent = Number(miner?.bonusPercent);
     if (!Number.isFinite(bonusPercent) || bonusPercent <= 0) return;
     const signature = getMarketVariantSignature(miner);
@@ -693,7 +673,7 @@ export function normalizeMarketMiners(rawItems) {
   });
 
   const deduped = new Map();
-  normalized.forEach((miner) => {
+  normalizedMiners.forEach((miner) => {
     const signature = getMarketVariantSignature(miner);
     const inferredBonus = inferredBonusBySignature.get(signature);
     const ownBonus = Number.isFinite(Number(miner?.bonusPercent)) ? Number(miner.bonusPercent) : 0;
@@ -719,7 +699,73 @@ export function normalizeMarketMiners(rawItems) {
   return [...deduped.values()];
 }
 
-export const normalizeCachedMarketMiners = normalizeMarketMiners;
+export function normalizeMarketMiners(rawItems) {
+  const normalized = (Array.isArray(rawItems) ? rawItems : [])
+    .map((item, index) => {
+      const miner = buildNormalizedMinerBase(item, index, "Marketplace miner", { market: true });
+      const price = Number.isFinite(Number(miner?.extractedPrice))
+        ? Number(miner.extractedPrice)
+        : extractMarketPrice(item);
+      if (!miner || !Number.isFinite(price) || price <= 0) return null;
+
+      const now = Date.now();
+      const { extractedPrice, ...baseMiner } = miner;
+      return {
+        ...baseMiner,
+        sourceOfferId: miner.id,
+        price,
+        firstSeenAt: Number(item?.firstSeenAt) || now,
+        lastSeenAt: Number(item?.lastSeenAt) || now,
+        lastPriceRefreshAt: Number(item?.lastPriceRefreshAt) || now,
+      };
+    })
+    .filter(Boolean);
+
+  return finalizeNormalizedMarketMiners(normalized);
+}
+
+export function normalizeCachedMarketMiners(rawItems) {
+  const normalized = (Array.isArray(rawItems) ? rawItems : [])
+    .map((item, index) => {
+      if (!item || typeof item !== "object") return null;
+
+      const price = Number(item?.price);
+      const power = Number(item?.power);
+      if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(power) || power <= 0) {
+        return null;
+      }
+
+      const level = firstFinite([item?.level]);
+      const width = firstFinite([item?.width]);
+      const bonusPercent = firstFinite([item?.bonusPercent, item?.bonus_percent]);
+      const imageCandidates = collectImageCandidates(item);
+      const imageUrl = imageCandidates[0] || normalizeUrl(item?.imageUrl || item?.image_url) || "";
+      const normalizedLevel = Number.isFinite(level) && level > 0 ? Math.floor(level) : null;
+
+      return {
+        id: String(item?.id || item?.sourceOfferId || `miner-${index + 1}`),
+        sourceOfferId: String(item?.sourceOfferId || item?.id || `miner-${index + 1}`),
+        name: String(item?.name || "Marketplace miner"),
+        power,
+        bonusPercent: Number.isFinite(bonusPercent) && bonusPercent >= 0 ? bonusPercent : 0,
+        level: normalizedLevel,
+        width: Number.isFinite(width) && width > 0 ? Math.floor(width) : null,
+        imageUrl,
+        imageCandidates,
+        levelBadgeUrl:
+          buildMinerLevelBadgeUrl(normalizedLevel) ||
+          normalizeUrl(item?.levelBadgeUrl || item?.level_badge_url),
+        currency: typeof item?.currency === "string" && item.currency ? item.currency : "RLT",
+        price,
+        firstSeenAt: Number(item?.firstSeenAt) || Date.now(),
+        lastSeenAt: Number(item?.lastSeenAt) || Date.now(),
+        lastPriceRefreshAt: Number(item?.lastPriceRefreshAt) || Date.now(),
+      };
+    })
+    .filter(Boolean);
+
+  return finalizeNormalizedMarketMiners(normalized);
+}
 
 export function normalizeMarketSourceInfo(rawSourceInfo, fallbackScore = 0) {
   return {
@@ -816,6 +862,7 @@ export function restoreMarketMinersCache() {
   try {
     if (!fs.existsSync(filePath)) return null;
     const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (Number(payload?.version) !== MARKET_MINERS_CACHE_VERSION) return null;
     const catalog = normalizeCachedMarketMiners(Array.isArray(payload?.catalog) ? payload.catalog : []);
     const activeMiners = buildActiveMarketMinersFromCatalog(catalog);
     if (catalog.length === 0 || activeMiners.length === 0) return null;
@@ -843,7 +890,7 @@ export function saveMarketMinersCache(catalog, sourceInfo) {
       filePath,
       JSON.stringify(
         {
-          version: 4,
+          version: MARKET_MINERS_CACHE_VERSION,
           savedAt: Date.now(),
           sourceInfo: normalizeMarketSourceInfo(
             sourceInfo,
