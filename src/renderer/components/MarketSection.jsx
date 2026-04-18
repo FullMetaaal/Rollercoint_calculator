@@ -21,11 +21,46 @@ function buildBudgetLabel(recommendations) {
     : "Budget: not set";
 }
 
+function toRomanNumeral(value) {
+  const numericValue = Math.floor(Number(value));
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return "";
+  }
+
+  const romanMap = [
+    ["M", 1000],
+    ["CM", 900],
+    ["D", 500],
+    ["CD", 400],
+    ["C", 100],
+    ["XC", 90],
+    ["L", 50],
+    ["XL", 40],
+    ["X", 10],
+    ["IX", 9],
+    ["V", 5],
+    ["IV", 4],
+    ["I", 1],
+  ];
+
+  let remainder = numericValue;
+  let result = "";
+
+  romanMap.forEach(([symbol, amount]) => {
+    while (remainder >= amount) {
+      result += symbol;
+      remainder -= amount;
+    }
+  });
+
+  return result;
+}
+
 function getMinerLevelLabel(miner) {
   if (!Number.isFinite(Number(miner?.level)) || Number(miner.level) <= 0) {
     return "";
   }
-  return String(Math.floor(Number(miner.level)));
+  return toRomanNumeral(miner.level);
 }
 
 function MinerVisual({ miner, className = "" }) {
@@ -64,7 +99,7 @@ function MinerVisual({ miner, className = "" }) {
         </div>
       )}
       {levelLabel ? (
-        <span className="market-miner-level-badge" aria-label={`Level ${levelLabel}`}>
+        <span className="market-miner-level-badge" aria-label={`Level ${Math.floor(Number(miner.level))}`}>
           {levelLabel}
         </span>
       ) : null}

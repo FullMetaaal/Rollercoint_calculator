@@ -729,7 +729,7 @@ tbody tr:hover {
   bottom: -6px;
   min-width: 20px;
   height: 20px;
-  padding: 0 6px;
+  padding: 0 5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -737,9 +737,10 @@ tbody tr:hover {
   border: 1px solid rgba(28, 62, 166, 0.18);
   background: linear-gradient(180deg, #ffffff, #e9f0ff);
   color: var(--primary-deep);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   line-height: 1;
+  letter-spacing: 0.02em;
   box-shadow: 0 6px 14px rgba(67, 83, 128, 0.18);
   pointer-events: none;
 }
