@@ -99,7 +99,6 @@ export default function App() {
               </button>
             </nav>
             <div className="workspace-header-actions">
-              <span className="workspace-language-label">{t("language")}</span>
               <div className="workspace-language-switch" role="group" aria-label={t("language")}>
                 <button
                   type="button"

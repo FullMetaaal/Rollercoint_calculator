@@ -47,6 +47,7 @@ export function createDefaultMarketState() {
     authChecking: false,
     cookieHeader: "",
     appUpdateChecking: false,
+    appUpdateStatus: "idle",
     appUpdateMessage: "",
     currentPowerSyncInFlight: false,
     currentPowerSyncStatus: "RollerCoin power sync is idle.",

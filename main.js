@@ -3,6 +3,7 @@ const fs = require("fs");
 const https = require("https");
 const os = require("os");
 const path = require("path");
+const APP_PACKAGE = require("./package.json");
 
 let mainWindow;
 let autoUpdater = null;
@@ -27,7 +28,26 @@ const MARKET_HTTPS_AGENT = new https.Agent({
   maxFreeSockets: Math.max(MARKET_DIRECT_PAGE_BATCH_SIZE, 4),
 });
 const STARTUP_LOG_PATH = path.join(os.tmpdir(), "roller-coin-calculator-startup.log");
+const RELEASE_CHECK_TIMEOUT_MS = 10000;
 const marketProgressState = new Map();
+
+function resolveGithubPublishConfig(publishConfig) {
+  const entries = Array.isArray(publishConfig)
+    ? publishConfig
+    : publishConfig && typeof publishConfig === "object"
+      ? [publishConfig]
+      : [];
+  const githubEntry = entries.find((entry) => entry && entry.provider === "github");
+  if (!githubEntry) return null;
+
+  const owner = String(githubEntry.owner || "").trim();
+  const repo = String(githubEntry.repo || "").trim();
+  if (!owner || !repo) return null;
+
+  return { owner, repo };
+}
+
+const GITHUB_PUBLISH_CONFIG = resolveGithubPublishConfig(APP_PACKAGE?.build?.publish);
 
 function normalizeMarketRefreshMode(value) {
   return value === "quick" ? "quick" : "full";
@@ -191,6 +211,404 @@ function logAutoUpdate(message, extra = null) {
   writeStartupLog(`[auto-update] ${message}`, extra);
 }
 
+function normalizeVersionLabel(value) {
+  return String(value || "").trim().replace(/^v/i, "");
+}
+
+function parseVersionLabel(value) {
+  const normalized = normalizeVersionLabel(value);
+  if (!normalized) return null;
+
+  const [core, prerelease = ""] = normalized.split("-", 2);
+  const parts = core.split(".").map((segment) => Number.parseInt(segment, 10));
+  if (parts.length === 0 || parts.some((segment) => !Number.isFinite(segment) || segment < 0)) {
+    return null;
+  }
+
+  return { parts, prerelease };
+}
+
+function compareVersionLabels(left, right) {
+  const parsedLeft = parseVersionLabel(left);
+  const parsedRight = parseVersionLabel(right);
+  if (!parsedLeft || !parsedRight) {
+    return normalizeVersionLabel(left).localeCompare(normalizeVersionLabel(right), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  }
+
+  const length = Math.max(parsedLeft.parts.length, parsedRight.parts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = parsedLeft.parts[index] || 0;
+    const rightPart = parsedRight.parts[index] || 0;
+    if (leftPart !== rightPart) {
+      return leftPart - rightPart;
+    }
+  }
+
+  if (parsedLeft.prerelease && !parsedRight.prerelease) return -1;
+  if (!parsedLeft.prerelease && parsedRight.prerelease) return 1;
+  return parsedLeft.prerelease.localeCompare(parsedRight.prerelease, undefined, { sensitivity: "base" });
+}
+
+function requestJson(url, timeoutMs = RELEASE_CHECK_TIMEOUT_MS, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": `${APP_PACKAGE?.name || "roller-coin-calculator"}/${app.getVersion()}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      },
+      (response) => {
+        const statusCode = Number(response.statusCode) || 0;
+        const location = response.headers.location;
+
+        if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+          response.resume();
+          if (redirectCount >= 4) {
+            reject(new Error("Too many redirects while checking GitHub releases."));
+            return;
+          }
+
+          const redirectUrl = new URL(location, url).toString();
+          resolve(requestJson(redirectUrl, timeoutMs, redirectCount + 1));
+          return;
+        }
+
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          const rawBody = Buffer.concat(chunks).toString("utf8");
+          if (statusCode < 200 || statusCode >= 300) {
+            try {
+              const parsedError = JSON.parse(rawBody);
+              const message = typeof parsedError?.message === "string" ? parsedError.message : "";
+              reject(new Error(message ? `GitHub Releases API returned ${statusCode}: ${message}` : `GitHub Releases API returned ${statusCode}.`));
+              return;
+            } catch {
+              reject(new Error(`GitHub Releases API returned ${statusCode}.`));
+              return;
+            }
+          }
+
+          try {
+            resolve(JSON.parse(rawBody));
+          } catch (error) {
+            reject(new Error(`GitHub Releases API returned invalid JSON: ${error.message}`));
+          }
+        });
+      },
+    );
+
+    request.on("error", reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("GitHub release check timed out."));
+    });
+  });
+}
+
+function requestLatestReleaseRedirect(url, timeoutMs = RELEASE_CHECK_TIMEOUT_MS, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      {
+        headers: {
+          "User-Agent": `${APP_PACKAGE?.name || "roller-coin-calculator"}/${app.getVersion()}`,
+        },
+      },
+      (response) => {
+        const statusCode = Number(response.statusCode) || 0;
+        const location = response.headers.location;
+
+        response.resume();
+
+        if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+          if (redirectCount >= 6) {
+            reject(new Error("Too many redirects while resolving the latest GitHub release."));
+            return;
+          }
+
+          const redirectUrl = new URL(location, url).toString();
+          resolve(requestLatestReleaseRedirect(redirectUrl, timeoutMs, redirectCount + 1));
+          return;
+        }
+
+        if (statusCode < 200 || statusCode >= 400) {
+          reject(new Error(`GitHub release page returned ${statusCode}.`));
+          return;
+        }
+
+        resolve({
+          url,
+          statusCode,
+        });
+      },
+    );
+
+    request.on("error", reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("GitHub release redirect check timed out."));
+    });
+  });
+}
+
+function requestText(url, timeoutMs = RELEASE_CHECK_TIMEOUT_MS, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      {
+        headers: {
+          "User-Agent": `${APP_PACKAGE?.name || "roller-coin-calculator"}/${app.getVersion()}`,
+        },
+      },
+      (response) => {
+        const statusCode = Number(response.statusCode) || 0;
+        const location = response.headers.location;
+
+        if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+          response.resume();
+          if (redirectCount >= 6) {
+            reject(new Error("Too many redirects while downloading the GitHub release feed."));
+            return;
+          }
+
+          const redirectUrl = new URL(location, url).toString();
+          resolve(requestText(redirectUrl, timeoutMs, redirectCount + 1));
+          return;
+        }
+
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (statusCode < 200 || statusCode >= 300) {
+            reject(new Error(`GitHub release feed returned ${statusCode}.`));
+            return;
+          }
+
+          resolve({
+            url,
+            statusCode,
+            body,
+          });
+        });
+      },
+    );
+
+    request.on("error", reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("GitHub release feed request timed out."));
+    });
+  });
+}
+
+async function resolveLatestGithubReleaseViaRedirect({ owner, repo }) {
+  const result = await requestLatestReleaseRedirect(`https://github.com/${owner}/${repo}/releases/latest`);
+  const resolvedUrl = String(result?.url || "");
+  const parsedUrl = new URL(resolvedUrl);
+  const tagMatch = parsedUrl.pathname.match(/\/releases\/tag\/([^/]+)\/?$/i);
+  if (!tagMatch) {
+    throw new Error("Could not determine the latest release tag from the GitHub release page.");
+  }
+
+  const tag = decodeURIComponent(tagMatch[1]);
+  return {
+    version: normalizeVersionLabel(tag),
+    releaseUrl: resolvedUrl,
+  };
+}
+
+async function resolveLatestGithubReleaseViaFeed({ owner, repo }) {
+  const result = await requestText(`https://github.com/${owner}/${repo}/releases.atom`);
+  const body = String(result?.body || "");
+  const entryMatch = body.match(/<entry\b[\s\S]*?<\/entry>/i);
+  if (!entryMatch) {
+    throw new Error("No published GitHub releases were found for this app yet.");
+  }
+
+  const hrefMatch = entryMatch[0].match(/href="([^"]+\/releases\/tag\/[^"]+)"/i);
+  if (!hrefMatch) {
+    throw new Error("Could not determine the latest release tag from the GitHub release feed.");
+  }
+
+  const releaseUrl = hrefMatch[1].replace(/&amp;/g, "&");
+  const parsedUrl = new URL(releaseUrl);
+  const tagMatch = parsedUrl.pathname.match(/\/releases\/tag\/([^/]+)\/?$/i);
+  if (!tagMatch) {
+    throw new Error("Could not determine the latest release tag from the GitHub release feed.");
+  }
+
+  return {
+    version: normalizeVersionLabel(decodeURIComponent(tagMatch[1])),
+    releaseUrl,
+  };
+}
+
+async function checkGithubReleasesForUpdates({ manual = false } = {}) {
+  if (!GITHUB_PUBLISH_CONFIG) {
+    return {
+      started: false,
+      status: "unavailable",
+      message: "Update checks are unavailable in this build.",
+    };
+  }
+
+  const { owner, repo } = GITHUB_PUBLISH_CONFIG;
+  if (manual) {
+    logAutoUpdate("Manual GitHub release check requested.", {
+      owner,
+      repo,
+      packaged: app.isPackaged,
+    });
+  }
+
+  try {
+    const latestRelease = await requestJson(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);
+    const latestVersion = normalizeVersionLabel(latestRelease?.tag_name || latestRelease?.name || "");
+    if (!latestVersion) {
+      throw new Error("GitHub release did not include a version tag.");
+    }
+
+    const currentVersion = normalizeVersionLabel(app.getVersion());
+    const comparison = compareVersionLabels(latestVersion, currentVersion);
+    if (comparison > 0) {
+      return {
+        started: true,
+        status: "update-available",
+        version: latestVersion,
+        currentVersion,
+        releaseUrl: typeof latestRelease?.html_url === "string" ? latestRelease.html_url : "",
+        message: `Update ${latestVersion} is available on GitHub. Current version: ${currentVersion}.`,
+      };
+    }
+
+    if (comparison < 0) {
+      return {
+        started: true,
+        status: "up-to-date",
+        version: currentVersion,
+        latestVersion,
+        message: `You're using a newer local build (${currentVersion}) than the latest published release (${latestVersion}).`,
+      };
+    }
+
+    return {
+      started: true,
+      status: "up-to-date",
+      version: currentVersion,
+      latestVersion,
+      message: `You're already using the latest version (${currentVersion}).`,
+    };
+  }
+
+  catch (error) {
+    const message = error?.message || String(error);
+    logAutoUpdate("GitHub Releases API check failed. Falling back to release feed.", { message });
+
+    try {
+      const latestRelease = await resolveLatestGithubReleaseViaFeed({ owner, repo });
+      const latestVersion = normalizeVersionLabel(latestRelease.version);
+      if (!latestVersion) {
+        throw new Error("GitHub release feed did not resolve to a version tag.");
+      }
+
+      const currentVersion = normalizeVersionLabel(app.getVersion());
+      const comparison = compareVersionLabels(latestVersion, currentVersion);
+      if (comparison > 0) {
+        return {
+          started: true,
+          status: "update-available",
+          version: latestVersion,
+          currentVersion,
+          releaseUrl: latestRelease.releaseUrl || "",
+          message: `Update ${latestVersion} is available on GitHub. Current version: ${currentVersion}.`,
+        };
+      }
+
+      if (comparison < 0) {
+        return {
+          started: true,
+          status: "up-to-date",
+          version: currentVersion,
+          latestVersion,
+          message: `You're using a newer local build (${currentVersion}) than the latest published release (${latestVersion}).`,
+        };
+      }
+
+      return {
+        started: true,
+        status: "up-to-date",
+        version: currentVersion,
+        latestVersion,
+        message: `You're already using the latest version (${currentVersion}).`,
+      };
+    } catch (fallbackError) {
+      const fallbackMessage = fallbackError?.message || String(fallbackError);
+      logAutoUpdate("GitHub release feed fallback failed. Falling back to release redirect.", { message: fallbackMessage });
+
+      try {
+        const latestRelease = await resolveLatestGithubReleaseViaRedirect({ owner, repo });
+        const latestVersion = normalizeVersionLabel(latestRelease.version);
+        if (!latestVersion) {
+          throw new Error("GitHub release redirect did not resolve to a version tag.");
+        }
+
+        const currentVersion = normalizeVersionLabel(app.getVersion());
+        const comparison = compareVersionLabels(latestVersion, currentVersion);
+        if (comparison > 0) {
+          return {
+            started: true,
+            status: "update-available",
+            version: latestVersion,
+            currentVersion,
+            releaseUrl: latestRelease.releaseUrl || "",
+            message: `Update ${latestVersion} is available on GitHub. Current version: ${currentVersion}.`,
+          };
+        }
+
+        if (comparison < 0) {
+          return {
+            started: true,
+            status: "up-to-date",
+            version: currentVersion,
+            latestVersion,
+            message: `You're using a newer local build (${currentVersion}) than the latest published release (${latestVersion}).`,
+          };
+        }
+
+        return {
+          started: true,
+          status: "up-to-date",
+          version: currentVersion,
+          latestVersion,
+          message: `You're already using the latest version (${currentVersion}).`,
+        };
+      } catch (redirectError) {
+        const redirectMessage = redirectError?.message || String(redirectError);
+        logAutoUpdate("GitHub release redirect fallback failed.", { message: redirectMessage });
+        return {
+          started: true,
+          status: "error",
+          message: `Update check failed: ${redirectMessage}`,
+        };
+      }
+    }
+  }
+}
+
+function withTrackedUpdateCheck(executor) {
+  autoUpdateCheckInFlight = Promise.resolve()
+    .then(executor)
+    .finally(() => {
+      autoUpdateCheckInFlight = null;
+    });
+  return autoUpdateCheckInFlight;
+}
+
 function getAutoUpdater() {
   if (autoUpdater) {
     return autoUpdater;
@@ -305,24 +723,6 @@ function scheduleAutoUpdateCheck() {
 }
 
 function triggerAutoUpdateCheck({ manual = false } = {}) {
-  if (!app.isPackaged) {
-    return Promise.resolve({
-      started: false,
-      status: "unavailable",
-      message: "App updates are available only in packaged builds.",
-    });
-  }
-
-  setupAutoUpdater();
-  const updater = getAutoUpdater();
-  if (!updater) {
-    return Promise.resolve({
-      started: false,
-      status: "unavailable",
-      message: "Auto-update is temporarily unavailable in this build.",
-    });
-  }
-
   if (autoUpdateCheckInFlight) {
     return Promise.resolve({
       started: false,
@@ -331,7 +731,17 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
     });
   }
 
-  autoUpdateCheckInFlight = new Promise((resolve) => {
+  if (!app.isPackaged) {
+    return withTrackedUpdateCheck(() => checkGithubReleasesForUpdates({ manual }));
+  }
+
+  setupAutoUpdater();
+  const updater = getAutoUpdater();
+  if (!updater) {
+    return withTrackedUpdateCheck(() => checkGithubReleasesForUpdates({ manual }));
+  }
+
+  return withTrackedUpdateCheck(() => new Promise((resolve) => {
     let settled = false;
 
     const cleanup = () => {
@@ -344,7 +754,6 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
       if (settled) return;
       settled = true;
       cleanup();
-      autoUpdateCheckInFlight = null;
       resolve(result);
     };
 
@@ -391,9 +800,7 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
       })
       .then(() => updater.checkForUpdates())
       .catch(onError);
-  });
-
-  return autoUpdateCheckInFlight;
+  }));
 }
 
 function buildApplicationMenu() {
@@ -478,6 +885,7 @@ function createWindow() {
     width: 1100,
     height: 800,
     show: false,
+    autoHideMenuBar: process.platform !== "darwin",
     backgroundColor: "#eef3ff",
     webPreferences: {
       nodeIntegration: true,
@@ -489,6 +897,10 @@ function createWindow() {
   mainWindow.on("closed", () => {
     writeStartupLog("Main window closed.");
   });
+
+  if (process.platform !== "darwin") {
+    mainWindow.setMenuBarVisibility(false);
+  }
 
   mainWindow.on("close", () => {
     writeStartupLog("Main window close requested.", {
@@ -6957,7 +7369,11 @@ async function fetchRollercoinRoomConfig(preferredCookieHeader = "", roomConfigR
 if (hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     writeStartupLog("App ready.");
-    Menu.setApplicationMenu(buildApplicationMenu());
+    if (process.platform === "darwin") {
+      Menu.setApplicationMenu(buildApplicationMenu());
+    } else {
+      Menu.setApplicationMenu(null);
+    }
     attachRollercoinAssetRequestHeaders(session.defaultSession);
     attachRollercoinAssetRequestHeaders(session.fromPartition(ROLLERCOIN_PARTITION));
     createWindow();

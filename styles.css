@@ -132,22 +132,16 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex: 1;
   gap: 16px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .workspace-header-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.workspace-language-label {
-  color: #6d7f97;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  margin-left: auto;
 }
 
 .workspace-language-switch {
@@ -700,6 +694,14 @@ button.ghost:hover {
 
 .auth-actions {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.auth-action-row {
+  display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
@@ -721,6 +723,23 @@ button.ghost:hover {
   white-space: nowrap;
   font-size: 14px;
   color: var(--text);
+}
+
+.auth-update-note {
+  margin: 0;
+  max-width: 420px;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: right;
+  color: var(--muted);
+}
+
+.auth-update-note.is-success {
+  color: var(--primary-deep);
+}
+
+.auth-update-note.is-error {
+  color: var(--danger);
 }
 
 .header-row {
@@ -1850,11 +1869,21 @@ tbody tr:hover {
 
   .auth-actions {
     width: 100%;
+    align-items: stretch;
+  }
+
+  .auth-action-row {
+    width: 100%;
     justify-content: stretch;
   }
 
-  .auth-actions button {
+  .auth-action-row button {
     width: 100%;
+  }
+
+  .auth-update-note {
+    max-width: none;
+    text-align: left;
   }
 
   .result-grid {

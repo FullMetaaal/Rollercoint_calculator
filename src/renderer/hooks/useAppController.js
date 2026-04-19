@@ -534,12 +534,18 @@ export function useAppController() {
   }
 
   async function checkForUpdates() {
-    setMarket((prev) => ({ ...prev, appUpdateChecking: true, appUpdateMessage: "Checking for updates..." }));
+    setMarket((prev) => ({
+      ...prev,
+      appUpdateChecking: true,
+      appUpdateStatus: "checking",
+      appUpdateMessage: "Checking for updates...",
+    }));
     try {
       const result = await invokeAppUpdateCheck();
       setMarket((prev) => ({
         ...prev,
         appUpdateChecking: false,
+        appUpdateStatus: result?.status || "idle",
         appUpdateMessage: result?.message || "App update check finished.",
         marketStatus: result?.message || prev.marketStatus,
       }));
@@ -547,6 +553,7 @@ export function useAppController() {
       setMarket((prev) => ({
         ...prev,
         appUpdateChecking: false,
+        appUpdateStatus: "error",
         appUpdateMessage: `App update check failed: ${error.message}`,
         marketStatus: `App update check failed: ${error.message}`,
       }));
