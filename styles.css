@@ -1507,11 +1507,14 @@ tbody tr:hover {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  align-items: start;
 }
 
 .suggestion-panel {
   display: grid;
   gap: 8px;
+  align-content: start;
+  align-items: start;
   padding: 10px;
   border-radius: 14px;
   border: 1px solid rgba(212, 221, 238, 0.96);
