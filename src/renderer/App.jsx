@@ -1,11 +1,12 @@
 import "../../styles.css";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AuthBanner } from "./components/AuthBanner";
 import { ComparisonSection } from "./components/ComparisonSection";
 import { CurrentSystemSection } from "./components/CurrentSystemSection";
 import { MarketSection } from "./components/MarketSection";
 import { MergePlannerSection } from "./components/MergePlannerSection";
 import { useAppController } from "./hooks/useAppController";
+import { createI18n, persistLocale, restoreLocale } from "./lib/i18n";
 import { writeRendererLog } from "./lib/runtime";
 
 function scrollToId(targetId) {
@@ -27,10 +28,17 @@ export default function App() {
     recommendations,
     actions,
   } = useAppController();
+  const [locale, setLocale] = useState(() => restoreLocale());
+  const i18n = useMemo(() => createI18n(locale), [locale]);
+  const { t } = i18n;
 
   useEffect(() => {
     writeRendererLog("React App mounted");
   }, []);
+
+  useEffect(() => {
+    persistLocale(locale);
+  }, [locale]);
 
   const workspaceNavKey =
     market.primaryTab === "comparison"
@@ -38,7 +46,6 @@ export default function App() {
       : market.primaryTab === "merge"
         ? "merge"
         : "market";
-
   return (
     <main className="container">
       <section className="workspace-shell">
@@ -47,7 +54,7 @@ export default function App() {
             <div className="brand-mark" aria-hidden="true">RC</div>
             <div className="brand-copy">
               <span className="brand-label">RollerCoin Calculator</span>
-              <span className="brand-subtitle">Production-style market and comparison console</span>
+              <span className="brand-subtitle">{t("brand_subtitle")}</span>
             </div>
           </div>
 
@@ -58,7 +65,7 @@ export default function App() {
                 className={`workspace-nav-link ${workspaceNavKey === "currentSystem" ? "is-active" : ""}`}
                 onClick={() => scrollToId("currentSystemSection")}
               >
-                Current System
+                {t("nav_current_system")}
               </button>
               <button
                 type="button"
@@ -68,7 +75,7 @@ export default function App() {
                   scrollToId("marketTabPanel");
                 }}
               >
-                Market Scanner
+                {t("nav_market_scanner")}
               </button>
               <button
                 type="button"
@@ -78,7 +85,7 @@ export default function App() {
                   scrollToId("mergeTabPanel");
                 }}
               >
-                Merge Planner
+                {t("nav_merge_planner")}
               </button>
               <button
                 type="button"
@@ -88,9 +95,28 @@ export default function App() {
                   scrollToId("candidatesTabPanel");
                 }}
               >
-                Comparison
+                {t("nav_comparison")}
               </button>
             </nav>
+            <div className="workspace-header-actions">
+              <span className="workspace-language-label">{t("language")}</span>
+              <div className="workspace-language-switch" role="group" aria-label={t("language")}>
+                <button
+                  type="button"
+                  className={`workspace-language-btn ${locale === "en" ? "is-active" : ""}`}
+                  onClick={() => setLocale("en")}
+                >
+                  {t("language_en")}
+                </button>
+                <button
+                  type="button"
+                  className={`workspace-language-btn ${locale === "ru" ? "is-active" : ""}`}
+                  onClick={() => setLocale("ru")}
+                >
+                  {t("language_ru")}
+                </button>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -98,6 +124,7 @@ export default function App() {
           market={market}
           onAuthAction={actions.handleAuthAction}
           onCheckUpdates={actions.checkForUpdates}
+          i18n={i18n}
         />
 
         <CurrentSystemSection
@@ -113,13 +140,14 @@ export default function App() {
           onToggleHistory={() => actions.setIsPowerHistoryExpanded((value) => !value)}
           syncStatus={market.currentPowerSyncStatus}
           syncing={market.currentPowerSyncInFlight}
+          i18n={i18n}
         />
 
         <section className="app-tabs">
           <div className="workspace-section-heading workspace-section-heading-tabs">
             <div>
-              <p className="panel-eyebrow">Tools</p>
-              <h2>Calculation Workspace</h2>
+              <p className="panel-eyebrow">{t("tools")}</p>
+              <h2>{t("calculation_workspace")}</h2>
             </div>
             <div className="tab-list" role="tablist" aria-label="Tools">
               <button
@@ -128,7 +156,7 @@ export default function App() {
                 className={`tab-button ${market.primaryTab === "market" ? "is-active" : ""}`}
                 onClick={() => actions.setPrimaryTab("market")}
               >
-                Market Scanner
+                {t("nav_market_scanner")}
               </button>
               <button
                 id="mergeTabBtn"
@@ -136,7 +164,7 @@ export default function App() {
                 className={`tab-button ${market.primaryTab === "merge" ? "is-active" : ""}`}
                 onClick={() => actions.setPrimaryTab("merge")}
               >
-                Merge Planner
+                {t("nav_merge_planner")}
               </button>
               <button
                 id="candidatesTabBtn"
@@ -144,7 +172,7 @@ export default function App() {
                 className={`tab-button ${market.primaryTab === "comparison" ? "is-active" : ""}`}
                 onClick={() => actions.setPrimaryTab("comparison")}
               >
-                Candidate Comparison
+                {t("candidate_comparison")}
               </button>
             </div>
           </div>
@@ -155,6 +183,7 @@ export default function App() {
               recommendations={recommendations}
               displayUnit={currentSystem.displayUnit}
               actions={actions}
+              i18n={i18n}
             />
           </section>
 
@@ -164,6 +193,7 @@ export default function App() {
               mergeAnalysis={mergeAnalysis}
               displayUnit={currentSystem.displayUnit}
               actions={actions}
+              i18n={i18n}
             />
           </section>
 
@@ -172,6 +202,7 @@ export default function App() {
               comparison={comparison}
               comparisonAnalysis={comparisonAnalysis}
               actions={actions}
+              i18n={i18n}
             />
           </section>
         </section>

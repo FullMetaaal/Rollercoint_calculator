@@ -133,7 +133,12 @@ export function getCurrentSystemHistorySignature(snapshot) {
   return `${roundForStorage(snapshot.basePhs, 6)}|${roundForStorage(snapshot.bonusPercent, 4)}`;
 }
 
-export function getCurrentSystemHistorySourceLabel(source) {
+export function getCurrentSystemHistorySourceLabel(source, locale = "en") {
+  if (locale === "ru") {
+    if (source === "rollercoin-sync") return "Синхронизация RollerCoin";
+    if (source === "restore") return "Восстановлено";
+    return "Ручное изменение";
+  }
   if (source === "rollercoin-sync") return "RollerCoin sync";
   if (source === "restore") return "Restored";
   return "Manual edit";
@@ -208,9 +213,9 @@ export function persistCurrentSystemHistory(history) {
   writeStoredJson(CURRENT_SYSTEM_HISTORY_STORAGE_KEY, history);
 }
 
-export function formatHistoryDateTime(timestamp) {
+export function formatHistoryDateTime(timestamp, locale = "en") {
   if (!Number.isFinite(Number(timestamp))) return "-";
-  return new Date(Number(timestamp)).toLocaleString("en-US", {
+  return new Date(Number(timestamp)).toLocaleString(locale === "ru" ? "ru-RU" : "en-US", {
     year: "numeric",
     month: "short",
     day: "2-digit",

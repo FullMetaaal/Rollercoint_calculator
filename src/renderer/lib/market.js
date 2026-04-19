@@ -1368,6 +1368,22 @@ function sortRecommendationItems(items, sortMode = "gainPerPrice") {
   return [...items].sort((leftItem, rightItem) => compareRecommendationItems(leftItem, rightItem, sortMode));
 }
 
+function calculateGainBreakdown(currentSystem, projectedBaseThs, projectedBonusPercent) {
+  const currentBaseThs = Number(currentSystem?.baseThs) || 0;
+  const currentBonusPercent = Number(currentSystem?.bonusPercent) || 0;
+  const safeProjectedBaseThs = Number(projectedBaseThs) || 0;
+  const safeProjectedBonusPercent = Number(projectedBonusPercent) || 0;
+  const basePowerGainThs =
+    (safeProjectedBaseThs - currentBaseThs) * (1 + currentBonusPercent / 100);
+  const bonusPowerGainThs =
+    safeProjectedBaseThs * ((safeProjectedBonusPercent - currentBonusPercent) / 100);
+
+  return {
+    basePowerGainThs,
+    bonusPowerGainThs,
+  };
+}
+
 function buildRecommendationEntry({
   currentSystem,
   totalCurrentThs,
@@ -1407,6 +1423,8 @@ function buildRecommendationEntry({
     ? Number(removedBonusPercent)
     : normalizedReplacementMiners.reduce((sum, miner) => sum + (Number(miner.bonusPercent) || 0), 0);
 
+  const basePowerDeltaThs = safeBoughtPowerThs - safeRemovedPowerThs;
+  const bonusPercentDelta = safeBoughtBonusPercent - safeRemovedBonusPercent;
   const projectedBaseThs = currentSystem.baseThs + safeBoughtPowerThs - safeRemovedPowerThs;
   const projectedBonusPercent = currentSystem.bonusPercent + safeBoughtBonusPercent - safeRemovedBonusPercent;
   const projectedTotalThs = getCurrentTotal(projectedBaseThs, projectedBonusPercent);
@@ -1420,6 +1438,7 @@ function buildRecommendationEntry({
   const widthDisplay = widthDisplayValues.length > 0 ? widthDisplayValues.join(" + ") : "-";
   const leadMiner = normalizedPurchaseMiners[0] || {};
   const fairPriceData = buildAggregateFairPriceData(normalizedPurchaseMiners, numericPrice);
+  const gainBreakdown = calculateGainBreakdown(currentSystem, projectedBaseThs, projectedBonusPercent);
 
   return {
     entryType,
@@ -1467,6 +1486,11 @@ function buildRecommendationEntry({
     boughtBonusPercent: safeBoughtBonusPercent,
     removedPowerThs: safeRemovedPowerThs,
     removedBonusPercent: safeRemovedBonusPercent,
+    basePowerDelta: basePowerDeltaThs / POWER_MULTIPLIER["Ph/s"],
+    bonusPercentDelta,
+    basePowerGain: gainBreakdown.basePowerGainThs / POWER_MULTIPLIER["Ph/s"],
+    bonusPowerGain: gainBreakdown.bonusPowerGainThs / POWER_MULTIPLIER["Ph/s"],
+    finalTotalPowerGain: gainThs / POWER_MULTIPLIER["Ph/s"],
     removedMask,
     buyMask,
     marketMinerIds: normalizedPurchaseMiners.map((miner) => String(miner?.id || "")),
@@ -2045,6 +2069,9 @@ function emptyRecommendations(error, roomMinersSorted, roomMinersCount) {
     bundleCount: 0,
     recommendedCount: 0,
     totalMatched: 0,
+    currentBasePower: NaN,
+    currentBonusPercent: NaN,
+    currentTotalPower: NaN,
     roomMinersCount,
     filteredMarketMinersCount: 0,
     overlappingOwnedCount: 0,
@@ -2247,6 +2274,9 @@ export function buildMarketRecommendations({
     bundleCount: bundleItems.length,
     recommendedCount: upgradeItems.length,
     totalMatched: allItems.length,
+    currentBasePower: currentSystem.basePhs,
+    currentBonusPercent: currentSystem.bonusPercent,
+    currentTotalPower: totalCurrentThs / POWER_MULTIPLIER["Ph/s"],
     roomMinersCount: roomMiners.length,
     filteredMarketMinersCount: filteredMarketMiners.length,
     overlappingOwnedCount,

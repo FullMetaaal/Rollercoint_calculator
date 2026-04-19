@@ -1,9 +1,9 @@
 import { formatMarketValue, formatPowerFromPhs } from "../lib/power";
 import { MinerVisual } from "./MinerVisual";
 
-function formatLoadedAt(timestamp) {
-  if (!Number.isFinite(Number(timestamp))) return "Not loaded yet";
-  return new Date(Number(timestamp)).toLocaleString("en-US", {
+function formatLoadedAt(timestamp, locale, t) {
+  if (!Number.isFinite(Number(timestamp))) return t("not_loaded_yet");
+  return new Date(Number(timestamp)).toLocaleString(locale === "ru" ? "ru-RU" : "en-US", {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -12,24 +12,24 @@ function formatLoadedAt(timestamp) {
   });
 }
 
-function formatSpend(value) {
-  return Number.isFinite(Number(value)) ? `${formatMarketValue(value, 2)} RLT` : "Unknown";
+function formatSpend(value, t) {
+  return Number.isFinite(Number(value)) ? `${formatMarketValue(value, 2)} RLT` : t("unknown");
 }
 
-function formatProjectedGain(value, displayUnit) {
+function formatProjectedGain(value, displayUnit, t) {
   if (!Number.isFinite(Number(value))) {
-    return "Unknown";
+    return t("unknown");
   }
   return `+${formatPowerFromPhs(Number(value), displayUnit)}`;
 }
 
-function buildResultMeta(miner, displayUnit) {
+function buildResultMeta(miner, displayUnit, t) {
   const parts = [];
   if (Number.isFinite(Number(miner?.power)) && Number(miner.power) > 0) {
     parts.push(formatPowerFromPhs(miner.power, displayUnit));
   }
   if (Number.isFinite(Number(miner?.bonusPercent)) && Number(miner.bonusPercent) > 0) {
-    parts.push(`${formatMarketValue(miner.bonusPercent, 2)}% bonus`);
+    parts.push(`${formatMarketValue(miner.bonusPercent, 2)}% ${t("history_bonus").toLowerCase()}`);
   }
   if (Number.isFinite(Number(miner?.width)) && Number(miner.width) > 0) {
     parts.push(`W${Math.floor(Number(miner.width))}`);
@@ -40,7 +40,8 @@ function buildResultMeta(miner, displayUnit) {
   return parts.join(" | ");
 }
 
-function RequirementList({ items, emptyText, type }) {
+function RequirementList({ items, emptyText, type, i18n }) {
+  const { t } = i18n;
   if (!Array.isArray(items) || items.length === 0) {
     return <div className="muted">{emptyText}</div>;
   }
@@ -54,12 +55,15 @@ function RequirementList({ items, emptyText, type }) {
             <div className="market-miner-copy">
               <div className="merge-requirement-name">{item.name}</div>
               <div className="merge-requirement-meta">
-                Need {item.count} | Have {item.ownedCount}
-                {item.missingCount > 0 ? ` | Missing ${item.missingCount}` : " | Complete"}
+                {t("need_have_missing", {
+                  need: item.count,
+                  have: item.ownedCount,
+                  missing: item.missingCount > 0 ? t("missing_suffix", { value: item.missingCount }) : t("complete_suffix"),
+                })}
                 {item.rarity ? ` | ${item.rarity}` : ""}
                 {Number.isFinite(Number(item.level)) && Number(item.level) > 0 ? ` | L${Math.floor(Number(item.level))}` : ""}
                 {type === "miner" && Number.isFinite(Number(item.marketPrice)) && item.missingCount > 0
-                  ? ` | ${formatMarketValue(item.marketPrice, 2)} RLT each`
+                  ? ` | ${t("each_price", { value: formatMarketValue(item.marketPrice, 2) })}`
                   : ""}
               </div>
             </div>
@@ -78,7 +82,8 @@ function StatusBadge({ tone, label }) {
   );
 }
 
-function DiagnosticsCard({ title, diagnostics }) {
+function DiagnosticsCard({ title, diagnostics, i18n }) {
+  const { t, rt } = i18n;
   if (!diagnostics || typeof diagnostics !== "object") {
     return null;
   }
@@ -87,27 +92,28 @@ function DiagnosticsCard({ title, diagnostics }) {
     <article className="merge-diagnostic-card">
       <div className="merge-diagnostic-title">{title}</div>
       <div className="merge-diagnostic-meta">
-        Payload: {diagnostics.payloadCount || 0}
-        {diagnostics.sourcePath ? ` | Source: ${diagnostics.sourcePath}` : ""}
-        {diagnostics.selectedAuthVariant ? ` | Auth: ${diagnostics.selectedAuthVariant}` : ""}
-        {Number.isFinite(Number(diagnostics.cookieCount)) ? ` | Cookies: ${diagnostics.cookieCount}` : ""}
-        {Number.isFinite(Number(diagnostics.tokenCount)) && diagnostics.tokenCount > 0 ? ` | Tokens: ${diagnostics.tokenCount}` : ""}
+        {t("payload")}: {diagnostics.payloadCount || 0}
+        {diagnostics.sourcePath ? ` | ${t("source")}: ${diagnostics.sourcePath}` : ""}
+        {diagnostics.selectedAuthVariant ? ` | ${t("auth_short")}: ${diagnostics.selectedAuthVariant}` : ""}
+        {Number.isFinite(Number(diagnostics.cookieCount)) ? ` | ${t("cookies")}: ${diagnostics.cookieCount}` : ""}
+        {Number.isFinite(Number(diagnostics.tokenCount)) && diagnostics.tokenCount > 0 ? ` | ${t("tokens")}: ${diagnostics.tokenCount}` : ""}
       </div>
-      <div className="merge-diagnostic-meta">{diagnostics.attemptSummary || "No attempt metadata returned."}</div>
-      {diagnostics.error ? <div className="error merge-diagnostic-error">{diagnostics.error}</div> : null}
+      <div className="merge-diagnostic-meta">{rt(diagnostics.attemptSummary || t("no_attempt_metadata"))}</div>
+      {diagnostics.error ? <div className="error merge-diagnostic-error">{rt(diagnostics.error)}</div> : null}
     </article>
   );
 }
 
-function StageStatusLabel(state) {
-  if (state === "loading") return "Loading";
-  if (state === "success") return "Success";
-  if (state === "error") return "Error";
-  if (state === "warning") return "Partial";
-  return "Idle";
+function StageStatusLabel(state, t) {
+  if (state === "loading") return t("stage_loading");
+  if (state === "success") return t("stage_success");
+  if (state === "error") return t("stage_error");
+  if (state === "warning") return t("stage_partial");
+  return t("stage_idle");
 }
 
-function BudgetOpportunityCard({ item, displayUnit }) {
+function BudgetOpportunityCard({ item, displayUnit, i18n }) {
+  const { t, rt } = i18n;
   return (
     <article className="merge-budget-card">
       <div className="merge-budget-card-top">
@@ -115,69 +121,66 @@ function BudgetOpportunityCard({ item, displayUnit }) {
           <MinerVisual miner={item.miner} />
           <div className="merge-budget-copy">
             <div className="merge-result-name">{item.name}</div>
-            <div className="market-miner-subcopy">{buildResultMeta(item.miner, displayUnit) || "Miner stats unavailable"}</div>
+            <div className="market-miner-subcopy">{buildResultMeta(item.miner, displayUnit, t) || t("result_stats_unavailable")}</div>
           </div>
         </div>
-        <StatusBadge tone={item.type === "craft" ? "positive" : "neutral"} label={item.label} />
+        <StatusBadge tone={item.type === "craft" ? "positive" : "neutral"} label={rt(item.label)} />
       </div>
       <div className="merge-budget-metrics">
-        <span>Spend: {formatSpend(item.spend)}</span>
-        <span>Projected gain: {formatProjectedGain(item.gainPhs, displayUnit)}</span>
+        <span>{t("spend", { value: formatSpend(item.spend, t) })}</span>
+        <span>{t("projected_gain", { value: formatProjectedGain(item.gainPhs, displayUnit, t) })}</span>
         <span>
-          Gain / RLT: {Number.isFinite(Number(item.gainPerRlt)) && item.gainPerRlt !== Number.POSITIVE_INFINITY
+          {t("gain_per_rlt_value", { value: Number.isFinite(Number(item.gainPerRlt)) && item.gainPerRlt !== Number.POSITIVE_INFINITY
             ? formatPowerFromPhs(item.gainPerRlt, displayUnit)
             : item.spend <= 0
-              ? "Free"
-              : "Unknown"}
+              ? t("free_label")
+              : t("unknown") })}
         </span>
       </div>
-      <div className="market-price-subcopy">{item.summary}</div>
-      <div className="market-price-subcopy">{item.extra}</div>
+      <div className="market-price-subcopy">{rt(item.summary)}</div>
+      <div className="market-price-subcopy">{rt(item.extra)}</div>
       {Number.isFinite(Number(item.totalMissingMinerCopies)) ? (
         <div className="market-price-subcopy">
-          Missing miner copies to finish: {Math.max(0, Math.floor(Number(item.totalMissingMinerCopies)))}
+          {t("missing_miner_copies", { count: Math.max(0, Math.floor(Number(item.totalMissingMinerCopies))) })}
         </div>
       ) : null}
     </article>
   );
 }
 
-export function MergePlannerSection({ mergePlanner, mergeAnalysis, displayUnit, actions }) {
+export function MergePlannerSection({ mergePlanner, mergeAnalysis, displayUnit, actions, i18n }) {
+  const { t, rt, log, locale } = i18n;
   return (
     <section className="card merge-planner-card">
       <div className="workspace-section-heading">
         <div>
-          <p className="panel-eyebrow">Merge Planning</p>
-          <h2>Merge Planner</h2>
+          <p className="panel-eyebrow">{t("merge_eyebrow")}</p>
+          <h2>{t("merge_title")}</h2>
           <p className="section-subtitle">
-            Compare the real crafting path against the current market price so it is obvious what is better to craft
-            and what is better to buy ready.
+            {t("merge_subtitle")}
           </p>
         </div>
         <div className="card-actions">
           <button type="button" className="primary" onClick={actions.loadMergePlannerData} disabled={mergePlanner.loading}>
-            {mergePlanner.loading ? "Loading..." : "Load merge data"}
+            {mergePlanner.loading ? t("auth_checking") : t("load_merge_data")}
           </button>
         </div>
       </div>
 
       <p className="inline-hint section-frame section-frame-copy">
-        Craft spend is estimated from missing miner copies in the current market cache. Missing parts are shown, but not
-        priced yet, so some decisions remain approximate.
+        {t("merge_hint")}
       </p>
 
       <section className="merge-stage-panel">
         <div className="header-row">
           <div>
-            <h3>Budget Advisor</h3>
-            <p className="section-subtitle">
-              Compare scanned merge crafts and direct market buys in one list to see what gives the best projected gain within your budget.
-            </p>
+            <h3>{t("budget_advisor")}</h3>
+            <p className="section-subtitle">{t("budget_advisor_copy")}</p>
           </div>
         </div>
         <div className="merge-budget-toolbar">
           <label className="merge-budget-label">
-            Budget (RLT)
+            {t("budget_rlt")}
             <input
               id="mergeBudgetInput"
               type="number"
@@ -188,53 +191,53 @@ export function MergePlannerSection({ mergePlanner, mergeAnalysis, displayUnit, 
               onChange={(event) => actions.updateMergePlannerBudget(event.target.value)}
             />
           </label>
-          <div className="merge-budget-summary muted">{mergeAnalysis.budgetSummaryText}</div>
+          <div className="merge-budget-summary muted">{rt(mergeAnalysis.budgetSummaryText)}</div>
         </div>
         <div className="merge-budget-grid">
           {Array.isArray(mergeAnalysis.budgetOpportunities) && mergeAnalysis.budgetOpportunities.length > 0 ? (
             mergeAnalysis.budgetOpportunities.map((item) => (
-              <BudgetOpportunityCard key={item.id} item={item} displayUnit={displayUnit} />
+              <BudgetOpportunityCard key={item.id} item={item} displayUnit={displayUnit} i18n={i18n} />
             ))
           ) : (
-            <div className="muted">No budget options yet. Load merge data, keep market data fresh, and enter a budget.</div>
+            <div className="muted">{t("no_budget_options")}</div>
           )}
         </div>
       </section>
 
       <div className="merge-summary-grid">
         <article className="insight-card">
-          <span className="insight-label">Recipes</span>
+          <span className="insight-label">{t("recipes")}</span>
           <div className="insight-value">{mergeAnalysis.items.length}</div>
         </article>
         <article className="insight-card">
-          <span className="insight-label">Craft Now</span>
+          <span className="insight-label">{t("craft_now")}</span>
           <div className="insight-value positive">{mergeAnalysis.craftNowCount}</div>
         </article>
         <article className="insight-card">
-          <span className="insight-label">Craft Cheaper</span>
+          <span className="insight-label">{t("craft_cheaper")}</span>
           <div className="insight-value positive">{mergeAnalysis.craftCheaperCount}</div>
         </article>
         <article className="insight-card">
-          <span className="insight-label">Buy Cheaper</span>
+          <span className="insight-label">{t("buy_cheaper")}</span>
           <div className="insight-value">{mergeAnalysis.buyCheaperCount}</div>
         </article>
         <article className="insight-card">
-          <span className="insight-label">Need Miners</span>
+          <span className="insight-label">{t("need_miners")}</span>
           <div className="insight-value">{mergeAnalysis.missingMinerCount}</div>
         </article>
         <article className="insight-card">
-          <span className="insight-label">Need Parts</span>
+          <span className="insight-label">{t("need_parts")}</span>
           <div className="insight-value">{mergeAnalysis.missingPartCount}</div>
         </article>
       </div>
 
       <div className="status-stack">
-        <p className="status-line">{mergePlanner.status}</p>
-        <p className="status-line">{mergeAnalysis.summaryText}</p>
+        <p className="status-line">{rt(mergePlanner.status)}</p>
+        <p className="status-line">{rt(mergeAnalysis.summaryText)}</p>
         <p className="status-line">
-          Inventory miners: {mergePlanner.inventoryMinersStatus} | Parts: {mergePlanner.inventoryPartsStatus} | Recipes: {mergePlanner.recipesStatus}
+          {t("inventory_miners_status")}: {rt(mergePlanner.inventoryMinersStatus)} | {t("parts_status")}: {rt(mergePlanner.inventoryPartsStatus)} | {t("recipes_status")}: {rt(mergePlanner.recipesStatus)}
         </p>
-        <p className="status-line">Last merge refresh: {formatLoadedAt(mergePlanner.lastLoadedAt)}</p>
+        <p className="status-line">{t("last_merge_refresh", { value: formatLoadedAt(mergePlanner.lastLoadedAt, locale, t) })}</p>
       </div>
 
       <div className="table-shell table-shell-large">
@@ -242,17 +245,17 @@ export function MergePlannerSection({ mergePlanner, mergeAnalysis, displayUnit, 
           <thead>
             <tr>
               <th>#</th>
-              <th>Result</th>
-              <th>Craft Path</th>
-              <th>Market Price</th>
-              <th>Decision</th>
-              <th>Recipe</th>
+              <th>{t("result")}</th>
+              <th>{t("craft_path")}</th>
+              <th>{t("market_price")}</th>
+              <th>{t("decision")}</th>
+              <th>{t("recipe")}</th>
             </tr>
           </thead>
           <tbody>
             {mergeAnalysis.items.length === 0 ? (
               <tr>
-                <td colSpan="6" className="muted">Merge recipes will appear here after loading merge planner data.</td>
+                <td colSpan="6" className="muted">{t("merge_empty")}</td>
               </tr>
             ) : (
               mergeAnalysis.items.map((item, index) => (
@@ -264,53 +267,53 @@ export function MergePlannerSection({ mergePlanner, mergeAnalysis, displayUnit, 
                       <div className="market-miner-copy">
                         <div className="merge-result-name">{item.resultMiner.name}</div>
                         <div className="market-miner-subcopy">
-                          {buildResultMeta(item.resultMiner, displayUnit) || "Result stats unavailable"}
+                          {buildResultMeta(item.resultMiner, displayUnit, t) || t("result_stats_unavailable")}
                         </div>
                         <div className="market-price-subcopy">
-                          Projected gain: {formatProjectedGain(item.projectedGainPhs, displayUnit)}
+                          {t("projected_gain", { value: formatProjectedGain(item.projectedGainPhs, displayUnit, t) })}
                         </div>
                         <div className="market-price-subcopy">
-                          Gain / RLT: {Number.isFinite(Number(item.projectedGainPerRlt)) && item.projectedGainPerRlt !== Number.POSITIVE_INFINITY
+                          {t("gain_per_rlt_value", { value: Number.isFinite(Number(item.projectedGainPerRlt)) && item.projectedGainPerRlt !== Number.POSITIVE_INFINITY
                             ? formatPowerFromPhs(item.projectedGainPerRlt, displayUnit)
                             : Number(item.craftSpendEstimate) <= 0 && Number.isFinite(Number(item.projectedGainPhs))
-                              ? "Free"
-                              : "Unknown"}
+                              ? t("free_label")
+                              : t("unknown") })}
                         </div>
                       </div>
                     </div>
                   </td>
                   <td>
-                    <StatusBadge tone={item.statusTone} label={item.statusLabel} />
-                    <div className="market-price-subcopy">Craft spend: {formatSpend(item.craftSpendEstimate)}</div>
+                    <StatusBadge tone={item.statusTone} label={rt(item.statusLabel)} />
+                    <div className="market-price-subcopy">{t("craft_spend", { value: formatSpend(item.craftSpendEstimate, t) })}</div>
                     <div className="market-price-subcopy">
-                      Missing miners: {item.totalMissingMinerCopies} | Missing parts: {item.totalMissingParts}
+                      {t("missing_miners_parts", { miners: item.totalMissingMinerCopies, parts: item.totalMissingParts })}
                     </div>
                   </td>
                   <td>
-                    <div>{formatSpend(item.marketSpendEstimate)}</div>
+                    <div>{formatSpend(item.marketSpendEstimate, t)}</div>
                     <div className="market-price-subcopy">
                       {Number.isFinite(Number(item.savingsVsMarket))
-                        ? `Gap: ${formatMarketValue(item.savingsVsMarket, 2)} RLT`
-                        : "Gap: unknown"}
+                        ? t("gap_value", { value: formatMarketValue(item.savingsVsMarket, 2) })
+                        : t("gap_unknown")}
                     </div>
                   </td>
                   <td>
-                    <StatusBadge tone={item.decisionTone} label={item.decisionLabel} />
+                    <StatusBadge tone={item.decisionTone} label={rt(item.decisionLabel)} />
                     <div className={item.decisionTone === "positive" ? "positive" : item.decisionTone === "negative" ? "negative" : "muted"}>
-                      {item.decisionSummary}
+                      {rt(item.decisionSummary)}
                     </div>
                   </td>
                   <td>
                     <details className="merge-details">
-                      <summary>Show recipe</summary>
+                      <summary>{t("show_recipe")}</summary>
                       <div className="merge-details-body">
                         <div className="merge-details-group">
-                          <div className="merge-details-title">Required miners</div>
-                          <RequirementList items={item.requiredMiners} emptyText="No miner requirements parsed." type="miner" />
+                          <div className="merge-details-title">{t("required_miners")}</div>
+                          <RequirementList items={item.requiredMiners} emptyText={t("no_miner_requirements")} type="miner" i18n={i18n} />
                         </div>
                         <div className="merge-details-group">
-                          <div className="merge-details-title">Required parts</div>
-                          <RequirementList items={item.requiredParts} emptyText="No part requirements parsed." type="part" />
+                          <div className="merge-details-title">{t("required_parts")}</div>
+                          <RequirementList items={item.requiredParts} emptyText={t("no_part_requirements")} type="part" i18n={i18n} />
                         </div>
                       </div>
                     </details>
@@ -323,36 +326,36 @@ export function MergePlannerSection({ mergePlanner, mergeAnalysis, displayUnit, 
       </div>
 
       <details className="merge-stage-panel merge-collapsible">
-        <summary>Load stages</summary>
+        <summary>{t("load_stages")}</summary>
         <div className="merge-stage-grid">
           {Array.isArray(mergePlanner.stages) && mergePlanner.stages.map((stage) => (
             <article key={stage.id} className="merge-stage-card">
               <div className="merge-stage-card-top">
-                <div className="merge-stage-title">{stage.label}</div>
-                <StatusBadge tone={stage.state === "idle" ? "neutral" : stage.state} label={StageStatusLabel(stage.state)} />
+                <div className="merge-stage-title">{rt(stage.label)}</div>
+                <StatusBadge tone={stage.state === "idle" ? "neutral" : stage.state} label={StageStatusLabel(stage.state, t)} />
               </div>
-              <div className="merge-stage-detail">{stage.detail}</div>
+              <div className="merge-stage-detail">{rt(stage.detail)}</div>
             </article>
           ))}
         </div>
       </details>
 
       <details className="merge-stage-panel merge-collapsible">
-        <summary>Endpoint diagnostics</summary>
+        <summary>{t("endpoint_diagnostics")}</summary>
         <div className="merge-diagnostic-grid">
-          <DiagnosticsCard title="Room" diagnostics={mergePlanner.diagnostics?.room} />
-          <DiagnosticsCard title="Inventory miners" diagnostics={mergePlanner.diagnostics?.inventoryMiners} />
-          <DiagnosticsCard title="Inventory parts" diagnostics={mergePlanner.diagnostics?.inventoryParts} />
-          <DiagnosticsCard title="Forge recipes" diagnostics={mergePlanner.diagnostics?.recipes} />
+          <DiagnosticsCard title={t("room")} diagnostics={mergePlanner.diagnostics?.room} i18n={i18n} />
+          <DiagnosticsCard title={t("inventory_miners_status")} diagnostics={mergePlanner.diagnostics?.inventoryMiners} i18n={i18n} />
+          <DiagnosticsCard title={t("parts_status")} diagnostics={mergePlanner.diagnostics?.inventoryParts} i18n={i18n} />
+          <DiagnosticsCard title={t("forge_recipes")} diagnostics={mergePlanner.diagnostics?.recipes} i18n={i18n} />
         </div>
       </details>
 
       <details className="merge-stage-panel merge-collapsible">
-        <summary>Load log</summary>
+        <summary>{t("load_log")}</summary>
         <pre className="market-logs-output muted">
           {Array.isArray(mergePlanner.logs) && mergePlanner.logs.length > 0
-            ? mergePlanner.logs.join("\n")
-            : "Logs will appear here after clicking Load merge data."}
+            ? mergePlanner.logs.map((entry) => log(entry)).join("\n")
+            : t("merge_logs_empty")}
         </pre>
       </details>
     </section>

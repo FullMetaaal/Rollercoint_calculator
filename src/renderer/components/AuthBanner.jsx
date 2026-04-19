@@ -1,4 +1,5 @@
-export function AuthBanner({ market, onAuthAction, onCheckUpdates }) {
+export function AuthBanner({ market, onAuthAction, onCheckUpdates, i18n }) {
+  const { t, rt } = i18n;
   const statusClass =
     market.authStatus === "valid"
       ? "auth-valid"
@@ -12,8 +13,8 @@ export function AuthBanner({ market, onAuthAction, onCheckUpdates }) {
         <span className="auth-toggle-knob"></span>
       </div>
       <div className="auth-meta">
-        <div className="auth-title">RollerCoin Auth</div>
-        <div className="auth-subtitle" id="authTokenMessage">{market.authMessage}</div>
+        <div className="auth-title">{t("auth_title")}</div>
+        <div className="auth-subtitle" id="authTokenMessage">{rt(market.authMessage)}</div>
       </div>
       <div className="auth-actions">
         <button
@@ -23,7 +24,7 @@ export function AuthBanner({ market, onAuthAction, onCheckUpdates }) {
           onClick={onAuthAction}
           disabled={market.authChecking}
         >
-          {market.authChecking ? "Checking..." : market.authStatus === "invalid" ? "Login required" : "Check auth"}
+          {market.authChecking ? t("auth_checking") : market.authStatus === "invalid" ? t("auth_login_button") : t("auth_check_button")}
         </button>
         <button
           id="checkAppUpdatesBtn"
@@ -32,7 +33,7 @@ export function AuthBanner({ market, onAuthAction, onCheckUpdates }) {
           onClick={onCheckUpdates}
           disabled={market.appUpdateChecking}
         >
-          {market.appUpdateChecking ? "Checking..." : "Check for app updates"}
+          {market.appUpdateChecking ? t("auth_checking") : t("auth_updates_button")}
         </button>
       </div>
     </div>

@@ -1,24 +1,25 @@
-export function ComparisonSection({ comparison, comparisonAnalysis, actions }) {
+export function ComparisonSection({ comparison, comparisonAnalysis, actions, i18n }) {
+  const { t, rt } = i18n;
   return (
     <>
       <section className="card">
         <div className="workspace-section-heading">
           <div>
-            <p className="panel-eyebrow">Replacement Baseline</p>
-            <h2>Replaced Miner (Optional)</h2>
+            <p className="panel-eyebrow">{t("comparison_baseline_eyebrow")}</p>
+            <h2>{t("comparison_baseline_title")}</h2>
             <p className="section-subtitle">
-              These fields are only needed for manual comparison when you are replacing a specific miner.
+              {t("comparison_baseline_subtitle")}
             </p>
           </div>
         </div>
 
         <div className="grid-3 section-frame">
           <label>
-            Old Miner Power
+            {t("old_miner_power")}
             <input id="oldMinerPowerValue" type="number" min="0" step="0.001" value={comparison.oldMinerPowerValue} onChange={(event) => actions.updateComparisonField("oldMinerPowerValue", event.target.value)} />
           </label>
           <label>
-            Unit
+            {t("unit")}
             <select id="oldMinerPowerUnit" value={comparison.oldMinerPowerUnit} onChange={(event) => actions.updateComparisonField("oldMinerPowerUnit", event.target.value)}>
               <option>Gh/s</option>
               <option>Th/s</option>
@@ -28,7 +29,7 @@ export function ComparisonSection({ comparison, comparisonAnalysis, actions }) {
             </select>
           </label>
           <label>
-            Old Miner Bonus (%)
+            {t("old_miner_bonus")}
             <input id="oldMinerBonusPercent" type="number" min="0" step="0.01" value={comparison.oldMinerBonusPercent} onChange={(event) => actions.updateComparisonField("oldMinerBonusPercent", event.target.value)} />
           </label>
         </div>
@@ -38,14 +39,14 @@ export function ComparisonSection({ comparison, comparisonAnalysis, actions }) {
         <section className="card">
           <div className="workspace-section-heading">
             <div>
-              <p className="panel-eyebrow">Manual Comparison</p>
-              <h2>Candidates</h2>
+              <p className="panel-eyebrow">{t("manual_comparison_eyebrow")}</p>
+              <h2>{t("candidates_title")}</h2>
               <p className="section-subtitle">
-                Compare several options manually. Currently in the list:
+                {t("candidates_subtitle")}
                 <span id="candidateCountStat"> {comparison.candidates.length}</span>
               </p>
             </div>
-            <button id="addCandidateBtn" type="button" className="ghost" onClick={actions.addCandidate}>Add Candidate</button>
+            <button id="addCandidateBtn" type="button" className="ghost" onClick={actions.addCandidate}>{t("add_candidate")}</button>
           </div>
 
           <div className="table-shell table-shell-compact">
@@ -53,10 +54,10 @@ export function ComparisonSection({ comparison, comparisonAnalysis, actions }) {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>Power</th>
-                  <th>Unit</th>
-                  <th>Bonus %</th>
-                  <th>Price ($)</th>
+                  <th>{t("history_base_power")}</th>
+                  <th>{t("unit")}</th>
+                  <th>{t("history_bonus")} %</th>
+                  <th>{t("candidate_price")}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -76,7 +77,7 @@ export function ComparisonSection({ comparison, comparisonAnalysis, actions }) {
                     </td>
                     <td><input type="number" min="0" step="0.01" className="cand-bonus" value={candidate.bonusPercent} onChange={(event) => actions.updateCandidate(candidate.id, "bonusPercent", event.target.value)} /></td>
                     <td><input type="number" min="0" step="0.01" className="cand-price" value={candidate.price} onChange={(event) => actions.updateCandidate(candidate.id, "price", event.target.value)} /></td>
-                    <td><button type="button" className="remove-btn" onClick={() => actions.removeCandidate(candidate.id)}>Delete</button></td>
+                    <td><button type="button" className="remove-btn" onClick={() => actions.removeCandidate(candidate.id)}>{t("delete")}</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -84,58 +85,58 @@ export function ComparisonSection({ comparison, comparisonAnalysis, actions }) {
           </div>
 
           <div className="header-actions">
-            <button id="calculateBtn" type="button">Calculate Best Option</button>
+            <button id="calculateBtn" type="button">{t("calculate_best")}</button>
           </div>
         </section>
 
         <section className="card result-card" id="resultCard">
           <div className="workspace-section-heading">
             <div>
-              <p className="panel-eyebrow">Output</p>
-              <h2>Result</h2>
+              <p className="panel-eyebrow">{t("output_eyebrow")}</p>
+              <h2>{t("result_title")}</h2>
             </div>
           </div>
           <div id="resultContent">
             {comparisonAnalysis.error ? (
-              <p className="error">{comparisonAnalysis.error}</p>
+              <p className="error">{rt(comparisonAnalysis.error)}</p>
             ) : comparisonAnalysis.summary ? (
               <>
-                <p className="best">Best candidate: #{comparisonAnalysis.summary.bestIndex}</p>
+                <p className="best">{t("best_candidate", { index: comparisonAnalysis.summary.bestIndex })}</p>
                 <div className="result-grid">
-                  <div className="muted">Selection metric</div>
-                  <div>{comparisonAnalysis.metricLabel}</div>
-                  <div className="muted">New base power</div>
+                  <div className="muted">{t("selection_metric")}</div>
+                  <div>{rt(comparisonAnalysis.metricLabel)}</div>
+                  <div className="muted">{t("new_base_power")}</div>
                   <div>{comparisonAnalysis.summary.baseNewText}</div>
-                  <div className="muted">New total bonus</div>
+                  <div className="muted">{t("new_total_bonus")}</div>
                   <div>{comparisonAnalysis.summary.bonusNewText}</div>
-                  <div className="muted">New total power</div>
+                  <div className="muted">{t("new_total_power")}</div>
                   <div>{comparisonAnalysis.summary.totalNewText}</div>
-                  <div className="muted">Total power gain</div>
+                  <div className="muted">{t("total_power_gain")}</div>
                   <div>{comparisonAnalysis.summary.deltaText}</div>
-                  <div className="muted">Gain per dollar</div>
-                  <div>{comparisonAnalysis.summary.deltaPerDollarText}</div>
+                  <div className="muted">{t("gain_per_dollar")}</div>
+                  <div>{rt(comparisonAnalysis.summary.deltaPerDollarText)}</div>
                 </div>
                 <table className="candidates-result-table">
                   <thead>
                     <tr>
-                      <th>Miner</th>
-                      <th>Total power gain</th>
-                      <th>Gain per $</th>
+                      <th>{t("miner")}</th>
+                      <th>{t("result_table_gain")}</th>
+                      <th>{t("result_table_gain_per_dollar")}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {comparisonAnalysis.rows.map((row) => (
                       <tr key={row.id}>
-                        <td>#{row.index}{comparisonAnalysis.bestIndex === row.index ? " (best)" : ""}</td>
+                        <td>#{row.index}{comparisonAnalysis.bestIndex === row.index ? t("best_suffix") : ""}</td>
                         <td>{row.deltaText}</td>
-                        <td>{row.deltaPerDollarText}</td>
+                        <td>{rt(row.deltaPerDollarText)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </>
             ) : (
-              "Add at least one candidate."
+              t("add_at_least_one_candidate")
             )}
           </div>
         </section>
