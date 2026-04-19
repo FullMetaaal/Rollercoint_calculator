@@ -14,6 +14,7 @@ export const MARKET_QUICK_REFRESH_PAGE_LIMIT = 8;
 export const MARKET_FULL_REFRESH_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 export const TABLE_RENDER_BATCH_SIZE = 25;
 export const MARKET_LOG_MAX_LINES = 250;
+export const PRICE_HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const BUDGET_COMBINATION_BUY_POOL_LIMIT = 90;
 const BUDGET_COMBINATION_REPLACEMENT_SET_LIMIT = 8;
@@ -21,6 +22,8 @@ const BUDGET_COMBINATION_OPTION_LIMIT = 320;
 const BUDGET_COMBINATION_STATE_LIMIT = 220;
 const BUDGET_COMBINATION_RESULT_LIMIT = 160;
 const BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH = 5;
+const PRICE_HISTORY_MAX_POINTS = 60;
+const PRICE_HISTORY_REPEAT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CACHE_FILENAME = "market-miners-cache.json";
 const MARKET_MINERS_CACHE_VERSION = 5;
 const MIN_GAIN_PHS = 0.001;
@@ -85,6 +88,213 @@ function firstFinite(values) {
     if (Number.isFinite(parsed)) return parsed;
   }
   return NaN;
+}
+
+function roundPriceValue(value) {
+  return Number(Number(value).toFixed(6));
+}
+
+function normalizePriceHistoryEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+
+  const price = Number(entry.price);
+  const observedAt = Number(entry.observedAt ?? entry.seenAt ?? entry.timestamp);
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(observedAt) || observedAt <= 0) {
+    return null;
+  }
+
+  return {
+    price: roundPriceValue(price),
+    observedAt: Math.floor(observedAt),
+  };
+}
+
+function trimPriceHistory(entries, now = Date.now()) {
+  const cutoff = now - PRICE_HISTORY_MAX_AGE_MS;
+  const dedupedByTimestamp = new Map();
+
+  (Array.isArray(entries) ? entries : []).forEach((entry) => {
+    const normalized = normalizePriceHistoryEntry(entry);
+    if (!normalized) return;
+    if (normalized.observedAt < cutoff) return;
+    dedupedByTimestamp.set(normalized.observedAt, normalized);
+  });
+
+  return [...dedupedByTimestamp.values()]
+    .sort((left, right) => left.observedAt - right.observedAt)
+    .slice(-PRICE_HISTORY_MAX_POINTS);
+}
+
+function mergePriceHistory(existingEntries, nextEntries, now = Date.now()) {
+  return trimPriceHistory([
+    ...(Array.isArray(existingEntries) ? existingEntries : []),
+    ...(Array.isArray(nextEntries) ? nextEntries : []),
+  ], now);
+}
+
+function appendPriceObservation(entries, price, observedAt = Date.now()) {
+  const normalizedHistory = trimPriceHistory(entries, observedAt);
+  const numericPrice = Number(price);
+  if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+    return normalizedHistory;
+  }
+
+  const nextEntry = {
+    price: roundPriceValue(numericPrice),
+    observedAt: Math.floor(observedAt),
+  };
+  const lastEntry = normalizedHistory[normalizedHistory.length - 1];
+  if (!lastEntry) {
+    return trimPriceHistory([...normalizedHistory, nextEntry], observedAt);
+  }
+
+  const samePrice = Math.abs(lastEntry.price - nextEntry.price) < 1e-9;
+  const withinRepeatWindow = nextEntry.observedAt - lastEntry.observedAt < PRICE_HISTORY_REPEAT_INTERVAL_MS;
+  if (samePrice && withinRepeatWindow) {
+    return trimPriceHistory([
+      ...normalizedHistory.slice(0, -1),
+      nextEntry,
+    ], observedAt);
+  }
+
+  return trimPriceHistory([...normalizedHistory, nextEntry], observedAt);
+}
+
+function calculateMedian(values) {
+  const sorted = [...values]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (sorted.length === 0) return NaN;
+
+  const middleIndex = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) {
+    return sorted[middleIndex];
+  }
+  return (sorted[middleIndex - 1] + sorted[middleIndex]) / 2;
+}
+
+function buildPriceWindowStats(entries, maxAgeMs, now = Date.now()) {
+  const filtered = trimPriceHistory(entries, now).filter((entry) => now - entry.observedAt <= maxAgeMs);
+  const prices = filtered.map((entry) => Number(entry.price)).filter((value) => Number.isFinite(value) && value > 0);
+
+  if (prices.length === 0) {
+    return {
+      sampleCount: 0,
+      minPrice: NaN,
+      maxPrice: NaN,
+      medianPrice: NaN,
+      averagePrice: NaN,
+      latestPrice: NaN,
+      firstObservedAt: null,
+      lastObservedAt: null,
+    };
+  }
+
+  const sum = prices.reduce((accumulator, value) => accumulator + value, 0);
+  return {
+    sampleCount: prices.length,
+    minPrice: Math.min(...prices),
+    maxPrice: Math.max(...prices),
+    medianPrice: calculateMedian(prices),
+    averagePrice: sum / prices.length,
+    latestPrice: prices[prices.length - 1],
+    firstObservedAt: filtered[0]?.observedAt || null,
+    lastObservedAt: filtered[filtered.length - 1]?.observedAt || null,
+  };
+}
+
+function deriveFairPriceCategory(currentPrice, referencePrice, sampleCount) {
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0 || !Number.isFinite(referencePrice) || referencePrice <= 0 || sampleCount < 2) {
+    return "no-history";
+  }
+
+  const ratio = currentPrice / referencePrice;
+  if (ratio <= 0.92) return "cheap";
+  if (ratio >= 1.08) return "overpriced";
+  return "fair";
+}
+
+function getFairPriceLabel(category) {
+  if (category === "cheap") return "Cheap";
+  if (category === "overpriced") return "Overpriced";
+  if (category === "fair") return "Near median";
+  return "New";
+}
+
+function buildPriceHistoryStats(entries, currentPrice, now = Date.now()) {
+  const history = trimPriceHistory(entries, now);
+  const window3d = buildPriceWindowStats(history, 3 * 24 * 60 * 60 * 1000, now);
+  const window7d = buildPriceWindowStats(history, 7 * 24 * 60 * 60 * 1000, now);
+  const window30d = buildPriceWindowStats(history, PRICE_HISTORY_MAX_AGE_MS, now);
+  const referenceWindow = window30d.sampleCount >= 2
+    ? { key: "30d", stats: window30d }
+    : window7d.sampleCount >= 2
+      ? { key: "7d", stats: window7d }
+      : window3d.sampleCount >= 2
+        ? { key: "3d", stats: window3d }
+        : { key: "30d", stats: window30d };
+  const hasReferenceHistory = referenceWindow.stats.sampleCount >= 2;
+  const referencePrice = hasReferenceHistory ? Number(referenceWindow.stats.medianPrice) : NaN;
+  const safeCurrentPrice = Number(currentPrice);
+  const deltaPercent =
+    Number.isFinite(safeCurrentPrice) &&
+    safeCurrentPrice > 0 &&
+    Number.isFinite(referencePrice) &&
+    referencePrice > 0
+      ? ((safeCurrentPrice - referencePrice) / referencePrice) * 100
+      : NaN;
+  const category = deriveFairPriceCategory(safeCurrentPrice, referencePrice, referenceWindow.stats.sampleCount);
+
+  return {
+    history,
+    totalSamples: history.length,
+    window3d,
+    window7d,
+    window30d,
+    referenceWindow: referenceWindow.key,
+    referencePrice,
+    deltaPercent,
+    category,
+    label: getFairPriceLabel(category),
+  };
+}
+
+function buildAggregateFairPriceData(miners, fallbackPrice) {
+  const normalizedMiners = Array.isArray(miners) ? miners.filter(Boolean) : [];
+  const eligibleMiners = normalizedMiners.filter((miner) => {
+    const referencePrice = Number(miner?.priceHistoryStats?.referencePrice);
+    const sampleCount = Number(miner?.priceHistoryStats?.totalSamples);
+    return Number.isFinite(referencePrice) && referencePrice > 0 && Number.isFinite(sampleCount) && sampleCount >= 2;
+  });
+  const aggregateReferencePrice = eligibleMiners.reduce((sum, miner) => {
+    const referencePrice = Number(miner?.priceHistoryStats?.referencePrice);
+    return Number.isFinite(referencePrice) && referencePrice > 0 ? sum + referencePrice : sum;
+  }, 0);
+  const aggregateSampleCount = eligibleMiners.reduce((sum, miner) => {
+    const sampleCount = Number(miner?.priceHistoryStats?.totalSamples);
+    return Number.isFinite(sampleCount) ? sum + sampleCount : sum;
+  }, 0);
+  const safePrice = Number(fallbackPrice);
+  const hasFullCoverage = normalizedMiners.length > 0 && eligibleMiners.length === normalizedMiners.length;
+  const deltaPercent =
+    hasFullCoverage &&
+    Number.isFinite(safePrice) &&
+    safePrice > 0 &&
+    aggregateReferencePrice > 0
+      ? ((safePrice - aggregateReferencePrice) / aggregateReferencePrice) * 100
+      : NaN;
+  const category = hasFullCoverage
+    ? deriveFairPriceCategory(safePrice, aggregateReferencePrice, aggregateSampleCount)
+    : "no-history";
+
+  return {
+    referencePrice: hasFullCoverage ? aggregateReferencePrice : NaN,
+    deltaPercent,
+    category,
+    label: getFairPriceLabel(category),
+    totalSamples: aggregateSampleCount,
+  };
 }
 
 function getMinerDisplayLevelFromRaw(value) {
@@ -657,6 +867,7 @@ function mergeNormalizedMarketVariant(existingMiner, nextMiner) {
       Number(existingMiner?.lastPriceRefreshAt) || 0,
       Number(nextMiner?.lastPriceRefreshAt) || 0,
     ),
+    priceHistory: mergePriceHistory(existingMiner?.priceHistory, nextMiner?.priceHistory),
   };
 }
 
@@ -690,13 +901,34 @@ function finalizeNormalizedMarketMiners(normalizedMiners) {
           ? (Number(miner.power) * (1 + resolvedBonusPercent / 100)) / Number(miner.price)
           : NaN,
     };
+    const priceHistoryStats = buildPriceHistoryStats(resolvedMiner.priceHistory, resolvedMiner.price);
+    const enrichedMiner = {
+      ...resolvedMiner,
+      priceHistory: priceHistoryStats.history,
+      priceHistoryStats,
+      fairPriceCategory: priceHistoryStats.category,
+      fairPriceLabel: priceHistoryStats.label,
+      fairPriceReferencePrice: priceHistoryStats.referencePrice,
+      fairPriceDeltaPercent: priceHistoryStats.deltaPercent,
+    };
     deduped.set(
-      resolvedMiner.variantKey,
-      mergeNormalizedMarketVariant(deduped.get(resolvedMiner.variantKey), resolvedMiner),
+      enrichedMiner.variantKey,
+      mergeNormalizedMarketVariant(deduped.get(enrichedMiner.variantKey), enrichedMiner),
     );
   });
 
-  return [...deduped.values()];
+  return [...deduped.values()].map((miner) => {
+    const priceHistoryStats = buildPriceHistoryStats(miner.priceHistory, miner.price);
+    return {
+      ...miner,
+      priceHistory: priceHistoryStats.history,
+      priceHistoryStats,
+      fairPriceCategory: priceHistoryStats.category,
+      fairPriceLabel: priceHistoryStats.label,
+      fairPriceReferencePrice: priceHistoryStats.referencePrice,
+      fairPriceDeltaPercent: priceHistoryStats.deltaPercent,
+    };
+  });
 }
 
 export function normalizeMarketMiners(rawItems) {
@@ -717,6 +949,7 @@ export function normalizeMarketMiners(rawItems) {
         firstSeenAt: Number(item?.firstSeenAt) || now,
         lastSeenAt: Number(item?.lastSeenAt) || now,
         lastPriceRefreshAt: Number(item?.lastPriceRefreshAt) || now,
+        priceHistory: trimPriceHistory(item?.priceHistory, now),
       };
     })
     .filter(Boolean);
@@ -760,6 +993,7 @@ export function normalizeCachedMarketMiners(rawItems) {
         firstSeenAt: Number(item?.firstSeenAt) || Date.now(),
         lastSeenAt: Number(item?.lastSeenAt) || Date.now(),
         lastPriceRefreshAt: Number(item?.lastPriceRefreshAt) || Date.now(),
+        priceHistory: trimPriceHistory(item?.priceHistory),
       };
     })
     .filter(Boolean);
@@ -817,6 +1051,11 @@ export function mergeMarketMinerCatalog(existingCatalog, scannedMiners, options 
       firstSeenAt: existing?.firstSeenAt || miner.firstSeenAt || now,
       lastSeenAt: now,
       lastPriceRefreshAt: now,
+      priceHistory: appendPriceObservation(
+        mergePriceHistory(existing?.priceHistory, miner?.priceHistory, now),
+        miner.price,
+        now,
+      ),
     });
   });
 
@@ -1073,6 +1312,13 @@ function cloneMinerForRecommendation(miner) {
     imageUrl: miner?.imageUrl || "",
     imageCandidates: Array.isArray(miner?.imageCandidates) ? [...miner.imageCandidates] : [],
     levelBadgeUrl: miner?.levelBadgeUrl || "",
+    fairPriceCategory: typeof miner?.fairPriceCategory === "string" ? miner.fairPriceCategory : "no-history",
+    fairPriceLabel: typeof miner?.fairPriceLabel === "string" ? miner.fairPriceLabel : "New",
+    fairPriceReferencePrice: Number.isFinite(Number(miner?.fairPriceReferencePrice)) ? Number(miner.fairPriceReferencePrice) : NaN,
+    fairPriceDeltaPercent: Number.isFinite(Number(miner?.fairPriceDeltaPercent)) ? Number(miner.fairPriceDeltaPercent) : NaN,
+    priceHistoryStats: miner?.priceHistoryStats && typeof miner.priceHistoryStats === "object"
+      ? { ...miner.priceHistoryStats }
+      : null,
   };
 }
 
@@ -1103,6 +1349,14 @@ function compareByGainThenEfficiencyDesc(leftItem, rightItem) {
 
 function compareRecommendationItems(leftItem, rightItem, sortMode = "gainPerPrice") {
   if (sortMode === "gainPower") {
+    return compareByGainThenEfficiencyDesc(leftItem, rightItem);
+  }
+  if (sortMode === "fairPrice") {
+    const leftDelta = Number(leftItem?.fairPriceDeltaPercent);
+    const rightDelta = Number(rightItem?.fairPriceDeltaPercent);
+    const leftSortValue = Number.isFinite(leftDelta) ? leftDelta : Number.POSITIVE_INFINITY;
+    const rightSortValue = Number.isFinite(rightDelta) ? rightDelta : Number.POSITIVE_INFINITY;
+    if (leftSortValue !== rightSortValue) return leftSortValue - rightSortValue;
     return compareByGainThenEfficiencyDesc(leftItem, rightItem);
   }
   if (rightItem.gainPerPrice !== leftItem.gainPerPrice) return rightItem.gainPerPrice - leftItem.gainPerPrice;
@@ -1165,6 +1419,7 @@ function buildRecommendationEntry({
     .filter(Boolean);
   const widthDisplay = widthDisplayValues.length > 0 ? widthDisplayValues.join(" + ") : "-";
   const leadMiner = normalizedPurchaseMiners[0] || {};
+  const fairPriceData = buildAggregateFairPriceData(normalizedPurchaseMiners, numericPrice);
 
   return {
     entryType,
@@ -1203,6 +1458,11 @@ function buildRecommendationEntry({
     imageCandidates: Array.isArray(leadMiner.imageCandidates) ? [...leadMiner.imageCandidates] : [],
     levelBadgeUrl: purchaseCount === 1 ? leadMiner.levelBadgeUrl || "" : "",
     currency,
+    fairPriceCategory: fairPriceData.category,
+    fairPriceLabel: fairPriceData.label,
+    fairPriceReferencePrice: fairPriceData.referencePrice,
+    fairPriceDeltaPercent: fairPriceData.deltaPercent,
+    fairPriceHistorySamples: fairPriceData.totalSamples,
     boughtPowerThs: safeBoughtPowerThs,
     boughtBonusPercent: safeBoughtBonusPercent,
     removedPowerThs: safeRemovedPowerThs,
@@ -1941,7 +2201,12 @@ export function buildMarketRecommendations({
   const maxPriceText = maxMinerPrice === null ? "not set" : formatMarketValue(maxMinerPrice, 2);
   const currentBaseText = formatPowerFromPhs(currentSystem.basePhs, currentSystem.displayUnit);
   const currentBonusText = `${formatMarketValue(currentSystem.bonusPercent, 2)}%`;
-  const sortModeText = marketSettings.sortMode === "gainPower" ? "gain to system" : "gain per RLT";
+  const sortModeText =
+    marketSettings.sortMode === "gainPower"
+      ? "gain to system"
+      : marketSettings.sortMode === "fairPrice"
+        ? "fair price first"
+        : "gain per RLT";
   const recommendationModeText = recommendationMode === "budget" ? "budget combinations" : "single purchase";
   const roomWidthText = marketSettings.roomWidthMode === "1"
     ? "small only"

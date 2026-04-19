@@ -21,6 +21,25 @@ function buildBudgetLabel(recommendations) {
     : "Budget: not set";
 }
 
+function formatSignedPercent(value, fractionDigits = 1) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return "-";
+  const sign = numericValue > 0 ? "+" : "";
+  return `${sign}${formatMarketValue(numericValue, fractionDigits)}%`;
+}
+
+function buildFairPriceDetailText(item) {
+  const referencePrice = Number(item?.fairPriceReferencePrice);
+  const samples = Number(item?.fairPriceHistorySamples ?? item?.priceHistoryStats?.totalSamples);
+  if (!Number.isFinite(referencePrice) || referencePrice <= 0) {
+    return "Not enough local history yet";
+  }
+
+  const deltaText = formatSignedPercent(item?.fairPriceDeltaPercent, 1);
+  const sampleText = Number.isFinite(samples) && samples > 0 ? ` | ${samples} sample${samples === 1 ? "" : "s"}` : "";
+  return `Median ${formatMarketValue(referencePrice, 2)} RLT | ${deltaText} vs median${sampleText}`;
+}
+
 function toRomanNumeral(value) {
   const numericValue = Math.floor(Number(value));
   if (!Number.isFinite(numericValue) || numericValue <= 0) {
@@ -348,6 +367,7 @@ function MarketResultsTable({ market, recommendations, displayUnit, onShowMore }
           >
             <option value="gainPerPrice">Gain / RLT</option>
             <option id="marketSortGainPowerOption" value="gainPower">Gain ({displayUnit})</option>
+            <option value="fairPrice">Fair price</option>
           </select>
         </label>
         <span id="marketResultsCountInfo" className="muted">
@@ -366,12 +386,13 @@ function MarketResultsTable({ market, recommendations, displayUnit, onShowMore }
               <th>Width</th>
               <th id="marketResultsGainHeader">Gain ({displayUnit})</th>
               <th id="marketResultsGainPerPriceHeader">Gain / RLT ({displayUnit})</th>
+              <th>Fair Price</th>
             </tr>
           </thead>
           <tbody id="marketResultsBody">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan="8" className="muted">Best market candidates will appear here after loading.</td>
+                <td colSpan="9" className="muted">Best market candidates will appear here after loading.</td>
               </tr>
             ) : (
               rows.map((miner, index) => {
@@ -389,12 +410,25 @@ function MarketResultsTable({ market, recommendations, displayUnit, onShowMore }
                     <td>
                       <MinerCell miner={leadMiner} subtitle={subtitle} />
                     </td>
-                    <td>{formatMarketValue(miner.price, 2)}</td>
+                    <td>
+                      <div>{formatMarketValue(miner.price, 2)}</div>
+                      <div className="market-price-subcopy">{buildFairPriceDetailText(miner)}</div>
+                    </td>
                     <td>{formatPowerFromPhs(miner.power, displayUnit)}</td>
                     <td>{formatMarketValue(miner.bonusPercent, 2)}%</td>
                     <td>{miner.widthDisplay || miner.width || "-"}</td>
                     <td>{formatPowerFromPhs(miner.gainPower, displayUnit)}</td>
                     <td>{Number.isFinite(miner.gainPerPrice) ? formatPowerFromPhs(miner.gainPerPrice, displayUnit) : "-"}</td>
+                    <td>
+                      <div className={`market-fair-price-badge market-fair-price-${miner.fairPriceCategory || "no-history"}`}>
+                        {miner.fairPriceLabel || "New"}
+                      </div>
+                      <div className="market-price-subcopy">
+                        {Number.isFinite(Number(miner.fairPriceDeltaPercent))
+                          ? `${formatSignedPercent(miner.fairPriceDeltaPercent, 1)} vs median`
+                          : "Waiting for more samples"}
+                      </div>
+                    </td>
                   </tr>
                 );
               })
