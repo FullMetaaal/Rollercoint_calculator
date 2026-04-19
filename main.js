@@ -609,6 +609,21 @@ function createHiddenWorkerWindow(options = {}) {
   });
 }
 
+function createDebuggerWorkerWindow(options = {}) {
+  return createHiddenWorkerWindow({
+    ...options,
+    focusable: true,
+    webPreferences: {
+      partition: ROLLERCOIN_PARTITION,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      backgroundThrottling: false,
+      ...(options.webPreferences || {}),
+    },
+  });
+}
+
 async function readRollercoinCookies(session) {
   const cookies = await session.cookies.get({ url: "https://rollercoin.com" });
   const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
@@ -1726,6 +1741,660 @@ async function syncCookieHeaderToSession(cookieHeader, targetSession) {
       // Ignore individual cookie set failures, the browser session may already contain valid cookies.
     }
   }
+}
+
+function buildRollercoinWorkerJsonFetchScript(endpoint, stepLabelPrefix, failureMessage, requestTimeoutMs = 5000, extraHeaders = {}, referrer = "") {
+  return `
+    (async () => {
+      const REQUEST_TIMEOUT_MS = ${Math.max(1000, Math.floor(Number(requestTimeoutMs) || 5000))};
+      const endpoint = ${JSON.stringify(endpoint)};
+      const stepLabelPrefix = ${JSON.stringify(stepLabelPrefix || "rollercoin-json")};
+      const failureMessage = ${JSON.stringify(failureMessage || "RollerCoin protected API rejected the session.")};
+      const extraHeaders = ${JSON.stringify(extraHeaders && typeof extraHeaders === "object" ? extraHeaders : {})};
+      const requestReferrer = ${JSON.stringify(referrer || "")};
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const fetchWithTimeout = async (url, options, timeoutMs) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          return await fetch(url, {
+            ...options,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
+      const tokenCandidates = [];
+      try {
+        for (let index = 0; index < localStorage.length; index += 1) {
+          const key = localStorage.key(index);
+          const value = localStorage.getItem(key);
+          if (!value) continue;
+          const lowerKey = String(key).toLowerCase();
+          if (/token|auth|jwt|access/.test(lowerKey) || /^eyJ[A-Za-z0-9_-]+\\./.test(value)) {
+            tokenCandidates.push({ key, value });
+          }
+        }
+      } catch {
+        // Ignore localStorage access issues.
+      }
+
+      const normalizeTokenValues = (value) => {
+        if (!value) return [];
+        const collected = [];
+        const pushIfValid = (candidate) => {
+          if (typeof candidate !== "string") return;
+          const trimmed = candidate.trim().replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
+          if (!trimmed) return;
+          if (/^Bearer\\s+/i.test(trimmed)) {
+            collected.push(trimmed);
+            collected.push(trimmed.replace(/^Bearer\\s+/i, ""));
+            return;
+          }
+          collected.push(trimmed);
+        };
+
+        pushIfValid(value);
+        try {
+          const parsed = JSON.parse(value);
+          const queue = [parsed];
+          const seen = new WeakSet();
+          while (queue.length > 0) {
+            const current = queue.shift();
+            if (!current) continue;
+            if (typeof current === "string") {
+              pushIfValid(current);
+              continue;
+            }
+            if (Array.isArray(current)) {
+              current.forEach((entry) => {
+                if (typeof entry === "string") {
+                  pushIfValid(entry);
+                } else if (entry && typeof entry === "object" && !seen.has(entry)) {
+                  seen.add(entry);
+                  queue.push(entry);
+                }
+              });
+              continue;
+            }
+            if (typeof current === "object") {
+              Object.entries(current).forEach(([key, entry]) => {
+                if (/token|auth|jwt|access/i.test(String(key))) {
+                  if (typeof entry === "string") {
+                    pushIfValid(entry);
+                  } else if (entry && typeof entry === "object" && !seen.has(entry)) {
+                    seen.add(entry);
+                    queue.push(entry);
+                  }
+                }
+              });
+            }
+          }
+        } catch {
+          // Ignore non-JSON token values.
+        }
+
+        return [...new Set(collected)];
+      };
+
+      const uniqueTokens = [];
+      const seenTokens = new Set();
+      for (const item of tokenCandidates) {
+        const normalizedValues = normalizeTokenValues(item.value);
+        normalizedValues.forEach((value) => {
+          if (!value || seenTokens.has(value)) return;
+          seenTokens.add(value);
+          uniqueTokens.push(value);
+        });
+      }
+
+      const headerVariants = [{ label: "cookie-only", headers: {} }];
+      uniqueTokens.forEach((token) => {
+        const clean = token.replace(/^Bearer\\s+/i, "");
+        headerVariants.push({ label: "authorization-bearer", headers: { Authorization: "Bearer " + clean } });
+        headerVariants.push({ label: "authorization-raw", headers: { Authorization: token } });
+        headerVariants.push({ label: "x-access-token", headers: { "x-access-token": clean } });
+        headerVariants.push({ label: "x-auth-token", headers: { "x-auth-token": clean } });
+        headerVariants.push({ label: "token", headers: { token: clean } });
+      });
+
+      const attempts = [];
+      for (let pass = 1; pass <= 3; pass += 1) {
+        for (const variant of headerVariants) {
+          try {
+            const response = await fetchWithTimeout(endpoint, {
+              method: "GET",
+              credentials: "include",
+              cache: "no-store",
+              referrer: requestReferrer || undefined,
+              referrerPolicy: requestReferrer ? "strict-origin-when-cross-origin" : undefined,
+              headers: {
+                Accept: "application/json, text/plain, */*",
+                "Cache-Control": "no-cache",
+                Pragma: "no-cache",
+                "X-Requested-With": "XMLHttpRequest",
+                ...extraHeaders,
+                ...variant.headers,
+              },
+            }, REQUEST_TIMEOUT_MS);
+
+            const text = await response.text();
+            let json = null;
+            try {
+              json = JSON.parse(text);
+            } catch {
+              // Ignore non-JSON payloads.
+            }
+
+            attempts.push({
+              step: stepLabelPrefix + "-response",
+              pass,
+              variant: variant.label,
+              status: response.status,
+            });
+
+            if (response.ok && json && typeof json === "object") {
+              return {
+                success: true,
+                json,
+                selectedAuthVariant: variant.label,
+                tokenCount: uniqueTokens.length,
+                attempts,
+              };
+            }
+          } catch (error) {
+            attempts.push({
+              step: stepLabelPrefix + "-request-error",
+              pass,
+              variant: variant.label,
+              error: String(error),
+            });
+          }
+        }
+
+        if (pass < 3) {
+          await wait(700 * pass);
+        }
+      }
+
+      return {
+        success: false,
+        unauthorized: true,
+        error: failureMessage,
+        tokenCount: uniqueTokens.length,
+        attempts,
+      };
+    })();
+  `;
+}
+
+async function fetchRollercoinJsonEndpoint(preferredCookieHeader = "", endpoint = "", options = {}) {
+  const authSession = session.fromPartition(ROLLERCOIN_PARTITION);
+  if (typeof preferredCookieHeader === "string" && preferredCookieHeader.trim()) {
+    await syncCookieHeaderToSession(preferredCookieHeader, authSession);
+  }
+
+  const sessionInfo = await readRollercoinCookies(authSession);
+  const cookieHeader =
+    typeof preferredCookieHeader === "string" && preferredCookieHeader.trim()
+      ? preferredCookieHeader.trim()
+      : sessionInfo.cookieHeader;
+  const timeoutMs =
+    Number.isFinite(Number(options?.timeoutMs)) && Number(options.timeoutMs) > 0
+      ? Math.floor(Number(options.timeoutMs))
+      : MARKET_REQUEST_TIMEOUT_MS;
+  const directHeaders =
+    options && typeof options.directHeaders === "object" && !Array.isArray(options.directHeaders)
+      ? options.directHeaders
+      : {};
+  const bootstrapUrl =
+    typeof options?.bootstrapUrl === "string" && options.bootstrapUrl.trim()
+      ? options.bootstrapUrl.trim()
+      : "https://rollercoin.com/";
+  const workerHeaders =
+    options && typeof options.workerHeaders === "object" && !Array.isArray(options.workerHeaders)
+      ? options.workerHeaders
+      : {};
+  const requestReferrer =
+    typeof options?.referrer === "string" && options.referrer.trim()
+      ? options.referrer.trim()
+      : bootstrapUrl;
+  const progress = typeof options?.progress === "function" ? options.progress : null;
+
+  if (cookieHeader) {
+    try {
+      const directResponse = await requestJsonWithCookieHeader(endpoint, cookieHeader, {
+        timeoutMs,
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          Referer: requestReferrer,
+          ...directHeaders,
+        },
+      });
+      if (
+        directResponse.statusCode >= 200 &&
+        directResponse.statusCode < 300 &&
+        directResponse.json &&
+        typeof directResponse.json === "object"
+      ) {
+        return {
+          success: true,
+          endpoint,
+          sourcePath: options?.sourcePathDirect || "direct-protected-json-api",
+          selectedAuthVariant: "cookie-only",
+          cookieCount: sessionInfo.cookieCount,
+          hasSessionCookie: sessionInfo.hasSessionCookie,
+          attempts: [],
+          json: directResponse.json,
+        };
+      }
+    } catch {
+      if (progress) {
+        progress(`Direct protected request failed for ${endpoint}.`, "warn");
+      }
+      // Fall through to browser-session fallback.
+    }
+  }
+
+  const worker = createHiddenWorkerWindow({
+    width: 1100,
+    height: 800,
+    title: options?.workerTitle || "RollerCoin Protected API Worker",
+  });
+
+  try {
+    await runWithTimeout(
+      worker.loadURL(bootstrapUrl),
+      15000,
+      `${options?.workerTitle || "Protected API worker"} bootstrap timeout (15s).`,
+    );
+
+    const raw = await runWithTimeout(
+      worker.webContents.executeJavaScript(
+        buildRollercoinWorkerJsonFetchScript(
+          endpoint,
+          options?.stepLabelPrefix || "rollercoin-json",
+          options?.failureMessage || "RollerCoin protected API rejected the session.",
+          options?.workerRequestTimeoutMs || 5000,
+          workerHeaders,
+          requestReferrer,
+        ),
+        true,
+      ),
+      45000,
+      `${options?.workerTitle || "Protected API worker"} executeJavaScript timeout (45s).`,
+    );
+
+    const result = parseWorkerResult(raw);
+    if (!result.success || !result.json || typeof result.json !== "object") {
+      const browserFailureResult = {
+        success: false,
+        endpoint,
+        unauthorized: Boolean(result.unauthorized),
+        error: result.error || options?.failureMessage || "RollerCoin protected API rejected the session.",
+        cookieCount: sessionInfo.cookieCount,
+        hasSessionCookie: sessionInfo.hasSessionCookie,
+        selectedAuthVariant: result.selectedAuthVariant || null,
+        attempts: Array.isArray(result.attempts) ? result.attempts : [],
+      };
+      if (options?.debuggerNavigateUrl) {
+        if (progress) {
+          progress(`Browser fetch was rejected for ${endpoint}. Trying debugger page-network fallback...`, "warn");
+        }
+        const debuggerResult = await captureJsonViaDebugger(
+          [endpoint],
+          options.debuggerNavigateUrl,
+          {
+            progress,
+            progressLabel: options?.debuggerProgressLabel || "Protected JSON debugger",
+          },
+        );
+        if (debuggerResult?.success && debuggerResult?.json && typeof debuggerResult.json === "object") {
+          return {
+            success: true,
+            endpoint: debuggerResult.endpoint || endpoint,
+            sourcePath: options?.sourcePathDebugger || "debugger-page-protected-json-api",
+            selectedAuthVariant: "page-session-debugger",
+            cookieCount: sessionInfo.cookieCount,
+            hasSessionCookie: sessionInfo.hasSessionCookie,
+            attempts: [
+              ...(browserFailureResult.attempts || []),
+              ...(Array.isArray(debuggerResult.attempts) ? debuggerResult.attempts : []),
+            ],
+            json: debuggerResult.json,
+          };
+        }
+
+        return {
+          ...browserFailureResult,
+          attempts: [
+            ...(browserFailureResult.attempts || []),
+            ...(Array.isArray(debuggerResult?.attempts) ? debuggerResult.attempts : []),
+          ],
+          error: `${browserFailureResult.error} | Debugger fallback: ${debuggerResult?.error || "unknown error"}`,
+        };
+      }
+      return browserFailureResult;
+    }
+
+    return {
+      success: true,
+      endpoint,
+      sourcePath: options?.sourcePathBrowser || "browser-session-protected-json-api",
+      selectedAuthVariant: result.selectedAuthVariant || null,
+      tokenCount: Number.isFinite(Number(result.tokenCount)) ? Number(result.tokenCount) : 0,
+      cookieCount: sessionInfo.cookieCount,
+      hasSessionCookie: sessionInfo.hasSessionCookie,
+      attempts: Array.isArray(result.attempts) ? result.attempts : [],
+      json: result.json,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      endpoint,
+      error: `${options?.errorPrefix || "Protected API fetch failed"}: ${error.message}`,
+      cookieCount: sessionInfo.cookieCount,
+      hasSessionCookie: sessionInfo.hasSessionCookie,
+      attempts: [],
+    };
+  } finally {
+    await closeWindowGracefully(worker);
+  }
+}
+
+function extractRollercoinObjectArrayPayload(payload, candidatePaths = [], errorMessage = "RollerCoin API returned no list.") {
+  if (Array.isArray(payload)) {
+    return payload.filter((entry) => entry && typeof entry === "object");
+  }
+
+  const root = payload && typeof payload === "object" ? payload : null;
+  if (!root) {
+    throw new Error(errorMessage);
+  }
+
+  const preferredRoots = [root];
+  if (root.data && typeof root.data === "object") {
+    preferredRoots.unshift(root.data);
+  }
+
+  for (const candidatePath of candidatePaths) {
+    for (const candidateRoot of preferredRoots) {
+      const value = getByPath(candidateRoot, candidatePath);
+      if (Array.isArray(value)) {
+        const normalized = value.filter((entry) => entry && typeof entry === "object");
+        if (normalized.length > 0) {
+          return normalized;
+        }
+      }
+    }
+  }
+
+  const seen = new Set();
+  const queue = [root];
+  let bestArray = [];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+
+    if (Array.isArray(current)) {
+      const normalized = current.filter((entry) => entry && typeof entry === "object");
+      if (normalized.length > bestArray.length) {
+        bestArray = normalized;
+      }
+      continue;
+    }
+
+    Object.values(current).forEach((value) => {
+      if (!value || typeof value !== "object") return;
+      queue.push(value);
+    });
+  }
+
+  if (bestArray.length > 0) {
+    return bestArray;
+  }
+
+  throw new Error(errorMessage);
+}
+
+function buildRollercoinInventoryEndpoint(kind = "miners", skip = 0, limit = 24) {
+  const safeKind = kind === "parts" ? "parts" : "miners";
+  const safeSkip = Math.max(0, Math.floor(Number(skip) || 0));
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 24)));
+  return `https://rollercoin.com/api/storage/inventory/${safeKind}?sort=date&sort_direction=-1&skip=${safeSkip}&limit=${safeLimit}`;
+}
+
+function buildPagedResultIdentityKey(item, fallbackPrefix, index) {
+  if (!item || typeof item !== "object") return `${fallbackPrefix}-${index + 1}`;
+  const directId = String(
+    item?.id ||
+    item?._id ||
+    item?.item_id ||
+    item?.offer_id ||
+    getByPath(item, "item.id") ||
+    getByPath(item, "product.id") ||
+    getByPath(item, "result.id") ||
+    "",
+  ).trim();
+  if (directId) return directId;
+
+  const name = String(
+    getByPath(item, "item.name.en") ||
+    getByPath(item, "product.name.en") ||
+    getByPath(item, "result.name.en") ||
+    item?.name ||
+    item?.title ||
+    "",
+  ).trim().toLowerCase();
+  const count = Number(firstFiniteNumber([item?.count, item?.quantity, item?.amount]) || 0);
+  return name ? `${fallbackPrefix}:${name}:${count}:${index}` : `${fallbackPrefix}-${index + 1}`;
+}
+
+async function fetchRollercoinPagedObjectList(preferredCookieHeader = "", options = {}) {
+  const limit =
+    Number.isFinite(Number(options?.limit)) && Number(options.limit) > 0
+      ? Math.max(1, Math.min(100, Math.floor(Number(options.limit))))
+      : 24;
+  const maxPages =
+    Number.isFinite(Number(options?.maxPages)) && Number(options.maxPages) > 0
+      ? Math.max(1, Math.min(80, Math.floor(Number(options.maxPages))))
+      : 20;
+  const aggregateKeyPrefix = String(options?.aggregateKeyPrefix || "paged-item");
+  const items = [];
+  const attempts = [];
+  const seenKeys = new Set();
+  let finalMeta = null;
+
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+    const skip = pageIndex * limit;
+    const endpoint = options.buildEndpoint(skip, limit);
+    const pageResult = await fetchRollercoinJsonEndpoint(preferredCookieHeader, endpoint, {
+      ...options.fetchOptions,
+    });
+
+    if (!pageResult.success) {
+      if (items.length > 0) {
+        return {
+          success: true,
+          endpoint: options.buildEndpoint(0, limit),
+          sourcePath: finalMeta?.sourcePath || pageResult.sourcePath || "",
+          selectedAuthVariant: finalMeta?.selectedAuthVariant || pageResult.selectedAuthVariant || null,
+          tokenCount: finalMeta?.tokenCount || pageResult.tokenCount || 0,
+          cookieCount: finalMeta?.cookieCount || pageResult.cookieCount || 0,
+          hasSessionCookie: finalMeta?.hasSessionCookie || pageResult.hasSessionCookie || false,
+          attempts: [...attempts, ...(Array.isArray(pageResult.attempts) ? pageResult.attempts : [])],
+          items,
+          partial: true,
+          error: pageResult.error || "",
+        };
+      }
+      return pageResult;
+    }
+
+    finalMeta = pageResult;
+    attempts.push(...(Array.isArray(pageResult.attempts) ? pageResult.attempts : []));
+
+    let pageItems = [];
+    try {
+      pageItems = extractRollercoinObjectArrayPayload(
+        pageResult.json,
+        Array.isArray(options?.candidatePaths) ? options.candidatePaths : [],
+        options?.emptyErrorMessage || "RollerCoin paged API returned no items.",
+      );
+    } catch (error) {
+      if (items.length > 0) {
+        break;
+      }
+      return {
+        ...pageResult,
+        success: false,
+        error: error.message,
+      };
+    }
+
+    let newItemCount = 0;
+    pageItems.forEach((item, index) => {
+      const itemKey = typeof options?.identityBuilder === "function"
+        ? options.identityBuilder(item, skip, index)
+        : buildPagedResultIdentityKey(item, aggregateKeyPrefix, skip + index);
+      if (!itemKey || seenKeys.has(itemKey)) return;
+      seenKeys.add(itemKey);
+      items.push(item);
+      newItemCount += 1;
+    });
+
+    if (pageItems.length < limit || newItemCount === 0) {
+      break;
+    }
+  }
+
+  if (items.length === 0) {
+    return {
+      success: false,
+      endpoint: options.buildEndpoint(0, limit),
+      error: options?.emptyErrorMessage || "RollerCoin paged API returned no items.",
+      attempts,
+    };
+  }
+
+  return {
+    success: true,
+    endpoint: options.buildEndpoint(0, limit),
+    sourcePath: finalMeta?.sourcePath || "",
+    selectedAuthVariant: finalMeta?.selectedAuthVariant || null,
+    tokenCount: finalMeta?.tokenCount || 0,
+    cookieCount: finalMeta?.cookieCount || 0,
+    hasSessionCookie: finalMeta?.hasSessionCookie || false,
+    attempts,
+    items,
+  };
+}
+
+async function fetchRollercoinInventoryMiners(preferredCookieHeader = "") {
+  const result = await fetchRollercoinPagedObjectList(preferredCookieHeader, {
+    limit: 24,
+    maxPages: 40,
+    aggregateKeyPrefix: "inventory-miner",
+    buildEndpoint: (skip, limit) => buildRollercoinInventoryEndpoint("miners", skip, limit),
+    candidatePaths: ["items", "miners", "inventory", "rows", "list", "data.items", "data.miners", "data.inventory"],
+    emptyErrorMessage: "RollerCoin inventory miners API returned no items.",
+    fetchOptions: {
+      workerTitle: "RollerCoin Inventory Miners Worker",
+      stepLabelPrefix: "inventory-miners",
+      failureMessage: "RollerCoin inventory miners API rejected the session.",
+      errorPrefix: "Inventory miners fetch failed",
+      sourcePathDirect: "direct-storage-inventory-miners-api",
+      sourcePathBrowser: "browser-session-storage-inventory-miners-api",
+      bootstrapUrl: "https://rollercoin.com/storage/miners",
+      referrer: "https://rollercoin.com/storage/miners",
+      directHeaders: {
+        Accept: "application/json, text/plain, */*",
+      },
+      debuggerNavigateUrl: "https://rollercoin.com/storage/miners",
+      debuggerProgressLabel: "Inventory miners debugger",
+      sourcePathDebugger: "debugger-storage-inventory-miners-api",
+    },
+  });
+  if (!result.success) {
+    return result;
+  }
+  return result;
+}
+
+async function fetchRollercoinInventoryParts(preferredCookieHeader = "") {
+  return fetchRollercoinPagedObjectList(preferredCookieHeader, {
+    limit: 24,
+    maxPages: 40,
+    aggregateKeyPrefix: "inventory-part",
+    buildEndpoint: (skip, limit) => buildRollercoinInventoryEndpoint("parts", skip, limit),
+    candidatePaths: ["items", "parts", "inventory", "rows", "list", "data.items", "data.parts", "data.inventory"],
+    emptyErrorMessage: "RollerCoin inventory parts API returned no items.",
+    fetchOptions: {
+      workerTitle: "RollerCoin Inventory Parts Worker",
+      stepLabelPrefix: "inventory-parts",
+      failureMessage: "RollerCoin inventory parts API rejected the session.",
+      errorPrefix: "Inventory parts fetch failed",
+      sourcePathDirect: "direct-storage-inventory-parts-api",
+      sourcePathBrowser: "browser-session-storage-inventory-parts-api",
+      bootstrapUrl: "https://rollercoin.com/storage/parts",
+      referrer: "https://rollercoin.com/storage/parts",
+      directHeaders: {
+        Accept: "application/json, text/plain, */*",
+      },
+      debuggerNavigateUrl: "https://rollercoin.com/storage/parts",
+      debuggerProgressLabel: "Inventory parts debugger",
+      sourcePathDebugger: "debugger-storage-inventory-parts-api",
+    },
+  });
+}
+
+function buildRollercoinMergeCraftingListEndpoint(skip = 0, limit = 12) {
+  const safeSkip = Math.max(0, Math.floor(Number(skip) || 0));
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 12)));
+  return `https://rollercoin.com/api/forge/crafting-list?sort=created&sort_direction=-1&group_code=miners_merge&is_craftable=false&skip=${safeSkip}&limit=${safeLimit}&group=merge`;
+}
+
+async function fetchRollercoinMergeCraftingList(preferredCookieHeader = "") {
+  const result = await fetchRollercoinPagedObjectList(preferredCookieHeader, {
+    limit: 12,
+    maxPages: 40,
+    aggregateKeyPrefix: "merge-recipe",
+    buildEndpoint: (skip, limit) => buildRollercoinMergeCraftingListEndpoint(skip, limit),
+    candidatePaths: ["items", "list", "rows", "data.items", "data.list", "data.rows", "recipes", "data.recipes"],
+    emptyErrorMessage: "RollerCoin merge crafting API returned no recipes.",
+    fetchOptions: {
+      workerTitle: "RollerCoin Merge Crafting Worker",
+      stepLabelPrefix: "merge-crafting",
+      failureMessage: "RollerCoin merge crafting API rejected the session.",
+      errorPrefix: "Merge crafting fetch failed",
+      sourcePathDirect: "direct-forge-crafting-list-api",
+      sourcePathBrowser: "browser-session-forge-crafting-list-api",
+      bootstrapUrl: "https://rollercoin.com/forge",
+      referrer: "https://rollercoin.com/forge",
+      directHeaders: {
+        Accept: "application/json, text/plain, */*",
+      },
+      debuggerNavigateUrl: "https://rollercoin.com/forge",
+      debuggerProgressLabel: "Forge recipes debugger",
+      sourcePathDebugger: "debugger-forge-crafting-list-api",
+    },
+    identityBuilder: (recipe, skip, index) =>
+      String(recipe?.id || recipe?._id || getByPath(recipe, "item.id") || getByPath(recipe, "result.id") || "").trim() ||
+      `merge-recipe:${skip + index}:${String(recipe?.name || recipe?.title || getByPath(recipe, "item.name.en") || "").trim().toLowerCase()}`,
+  });
+  if (!result.success) {
+    return result;
+  }
+
+  return {
+    ...result,
+    recipes: Array.isArray(result.items) ? result.items : [],
+  };
 }
 
 async function fetchMarketMinersViaDirectApi(preferredCookieHeader = "", progress = null, options = {}) {
@@ -4904,6 +5573,174 @@ async function captureMarketViaDebugger(endpoints, progress = null) {
   }
 }
 
+async function captureJsonViaDebugger(endpoints, navigateUrl, options = {}) {
+  const startedAt = Date.now();
+  const worker = createDebuggerWorkerWindow({
+    width: 1280,
+    height: 900,
+    title: options?.workerTitle || "RollerCoin Debugger Worker",
+  });
+  const endpointPaths = (Array.isArray(endpoints) ? endpoints : [])
+    .map((endpoint) => {
+      try {
+        return new URL(endpoint).pathname;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  const debuggerSession = worker.webContents.debugger;
+  const attempts = [];
+  const progress = typeof options?.progress === "function" ? options.progress : null;
+  const progressLabel = options?.progressLabel || "Debugger JSON strategy";
+  const targetUrl =
+    typeof navigateUrl === "string" && navigateUrl.trim()
+      ? navigateUrl.trim()
+      : "https://rollercoin.com/";
+
+  try {
+    if (progress) {
+      progress(`${progressLabel} bootstrapping ${targetUrl} before attaching debugger...`);
+    }
+    await runWithTimeout(
+      worker.loadURL(targetUrl),
+      20000,
+      `${progressLabel} bootstrap navigation timed out.`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    debuggerSession.attach("1.3");
+    await runWithTimeout(
+      debuggerSession.sendCommand("Network.enable"),
+      15000,
+      `${progressLabel} Network.enable timed out.`,
+    );
+
+    if (progress) {
+      progress(`${progressLabel} attached successfully. Reloading page to capture protected API calls...`);
+    }
+
+    const result = await runWithTimeout(new Promise((resolve) => {
+      let finished = false;
+      let timeoutId = null;
+      let onMessage = null;
+      let onDidNavigate = null;
+
+      const finalize = (value) => {
+        if (finished) return;
+        finished = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        if (onMessage) debuggerSession.removeListener("message", onMessage);
+        if (onDidNavigate) worker.webContents.removeListener("did-navigate", onDidNavigate);
+        resolve(value);
+      };
+
+      onDidNavigate = (_event, url) => {
+        attempts.push({ type: "navigate", url });
+        if (url.includes("/sign-in")) {
+          finalize({
+            success: false,
+            unauthorized: true,
+            hardUnauthorized: true,
+            error: "Session is not authenticated (redirected to sign-in).",
+            attempts,
+          });
+        }
+      };
+
+      onMessage = async (_event, method, params) => {
+        if (method !== "Network.responseReceived") return;
+
+        const url = params?.response?.url || "";
+        if (!endpointPaths.some((pathName) => url.includes(pathName))) return;
+
+        const status = Number(params?.response?.status || 0);
+        attempts.push({ type: "response", url, status });
+        if (progress) {
+          progress(`${progressLabel} saw response: HTTP ${status} (${url}).`);
+        }
+
+        if (status !== 200) return;
+
+        try {
+          const bodyResult = await debuggerSession.sendCommand("Network.getResponseBody", {
+            requestId: params.requestId,
+          });
+          const rawBody = bodyResult?.base64Encoded
+            ? Buffer.from(bodyResult.body, "base64").toString("utf8")
+            : bodyResult.body;
+          const json = JSON.parse(rawBody);
+          if (json && typeof json === "object") {
+            finalize({
+              success: true,
+              endpoint: url,
+              status,
+              json,
+              attempts,
+              via: "debugger-page-network",
+            });
+          }
+        } catch (error) {
+          attempts.push({
+            type: "parse-error",
+            url,
+            error: String(error),
+          });
+        }
+      };
+
+      debuggerSession.on("message", onMessage);
+      worker.webContents.on("did-navigate", onDidNavigate);
+
+      timeoutId = setTimeout(() => {
+        finalize({
+          success: false,
+          error: "Timed out waiting for in-app page API response.",
+          attempts,
+        });
+      }, 30000);
+
+      worker.webContents.reloadIgnoringCache().catch((error) => {
+        finalize({
+          success: false,
+          error: `Reload failed: ${error.message}`,
+          attempts,
+        });
+      });
+    }), 35000, `${progressLabel} hard timeout (35s).`);
+
+    if (progress) {
+      const elapsedMs = Date.now() - startedAt;
+      progress(
+        result.success
+          ? `${progressLabel} success in ${elapsedMs} ms.`
+          : `${progressLabel} failed in ${elapsedMs} ms: ${result.error || "unknown error"}.`,
+        result.success ? "success" : (result.unauthorized ? "warn" : "error"),
+      );
+    }
+
+    return result;
+  } catch (error) {
+    if (progress) {
+      progress(`${progressLabel} crashed: ${error.message}`, "error");
+    }
+    return {
+      success: false,
+      error: `${progressLabel} failed: ${error.message}`,
+      attempts,
+    };
+  } finally {
+    if (debuggerSession.isAttached()) {
+      try {
+        debuggerSession.detach();
+      } catch {
+        // Ignore debugger detach errors.
+      }
+    }
+    await closeWindowGracefully(worker);
+  }
+}
+
 async function fetchMarketViaSession(options = {}, progress = null) {
   const normalizedOptions = normalizeMarketFetchOptions(options);
   if (progress) {
@@ -6165,6 +7002,27 @@ if (hasSingleInstanceLock) {
           ? payload.roomConfigRef || ""
           : "";
       return fetchRollercoinRoomConfig(cookieHeader, roomConfigRef);
+    });
+    ipcMain.handle("rollercoin-inventory-miners-fetch", async (_event, payload) => {
+      const cookieHeader =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload.cookieHeader || ""
+          : "";
+      return fetchRollercoinInventoryMiners(cookieHeader);
+    });
+    ipcMain.handle("rollercoin-inventory-parts-fetch", async (_event, payload) => {
+      const cookieHeader =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload.cookieHeader || ""
+          : "";
+      return fetchRollercoinInventoryParts(cookieHeader);
+    });
+    ipcMain.handle("rollercoin-merge-crafting-fetch", async (_event, payload) => {
+      const cookieHeader =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload.cookieHeader || ""
+          : "";
+      return fetchRollercoinMergeCraftingList(cookieHeader);
     });
     ipcMain.handle("rollercoin-market-fetch", async (event, payload) => {
       const requestId =

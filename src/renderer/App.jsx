@@ -4,6 +4,7 @@ import { AuthBanner } from "./components/AuthBanner";
 import { ComparisonSection } from "./components/ComparisonSection";
 import { CurrentSystemSection } from "./components/CurrentSystemSection";
 import { MarketSection } from "./components/MarketSection";
+import { MergePlannerSection } from "./components/MergePlannerSection";
 import { useAppController } from "./hooks/useAppController";
 import { writeRendererLog } from "./lib/runtime";
 
@@ -21,6 +22,8 @@ export default function App() {
     market,
     comparison,
     comparisonAnalysis,
+    mergePlanner,
+    mergeAnalysis,
     recommendations,
     actions,
   } = useAppController();
@@ -29,7 +32,12 @@ export default function App() {
     writeRendererLog("React App mounted");
   }, []);
 
-  const workspaceNavKey = market.primaryTab === "comparison" ? "comparison" : "market";
+  const workspaceNavKey =
+    market.primaryTab === "comparison"
+      ? "comparison"
+      : market.primaryTab === "merge"
+        ? "merge"
+        : "market";
 
   return (
     <main className="container">
@@ -61,6 +69,16 @@ export default function App() {
                 }}
               >
                 Market Scanner
+              </button>
+              <button
+                type="button"
+                className={`workspace-nav-link ${workspaceNavKey === "merge" ? "is-active" : ""}`}
+                onClick={() => {
+                  actions.setPrimaryTab("merge");
+                  scrollToId("mergeTabPanel");
+                }}
+              >
+                Merge Planner
               </button>
               <button
                 type="button"
@@ -113,6 +131,14 @@ export default function App() {
                 Market Scanner
               </button>
               <button
+                id="mergeTabBtn"
+                type="button"
+                className={`tab-button ${market.primaryTab === "merge" ? "is-active" : ""}`}
+                onClick={() => actions.setPrimaryTab("merge")}
+              >
+                Merge Planner
+              </button>
+              <button
                 id="candidatesTabBtn"
                 type="button"
                 className={`tab-button ${market.primaryTab === "comparison" ? "is-active" : ""}`}
@@ -127,6 +153,15 @@ export default function App() {
             <MarketSection
               market={market}
               recommendations={recommendations}
+              displayUnit={currentSystem.displayUnit}
+              actions={actions}
+            />
+          </section>
+
+          <section id="mergeTabPanel" className={`tab-panel ${market.primaryTab === "merge" ? "is-active" : ""}`} hidden={market.primaryTab !== "merge"}>
+            <MergePlannerSection
+              mergePlanner={mergePlanner}
+              mergeAnalysis={mergeAnalysis}
               displayUnit={currentSystem.displayUnit}
               actions={actions}
             />

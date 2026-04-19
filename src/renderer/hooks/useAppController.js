@@ -1,6 +1,14 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { calculateComparisonAnalysis, createEmptyCandidateRow } from "../lib/comparison";
 import {
+  buildMergePlannerDiagnostics,
+  buildMergePlannerAnalysis,
+  createDefaultMergePlannerState,
+  invokeInventoryMiners,
+  invokeInventoryParts,
+  invokeMergeCraftingList,
+} from "../lib/merge";
+import {
   appendMarketLog,
   buildMarketRecommendations,
   buildMarketRefreshPlan,
@@ -82,6 +90,7 @@ export function useAppController() {
   });
   const [comparison, setComparison] = useState(DEFAULT_COMPARISON);
   const [marketRecommendations, setMarketRecommendations] = useState(() => createEmptyMarketRecommendationsState());
+  const [mergePlanner, setMergePlanner] = useState(() => createDefaultMergePlannerState());
   const marketHeartbeatRef = useRef(null);
   const marketRef = useRef(market);
   const currentSystemRef = useRef(currentSystem);
@@ -142,9 +151,48 @@ export function useAppController() {
     ...marketRecommendations,
     roomMinersSorted,
   };
+  const mergeAnalysis = buildMergePlannerAnalysis({
+    roomMiners: market.roomMiners,
+    rawInventoryMiners: mergePlanner.rawInventoryMiners,
+    rawInventoryParts: mergePlanner.rawInventoryParts,
+    rawRecipes: mergePlanner.rawRecipes,
+    marketMiners: market.marketMiners,
+    currentSystemState: currentSystem,
+    budgetInput: mergePlanner.budgetInput,
+  });
 
   function clearMarketRecommendations() {
     setMarketRecommendations(createEmptyMarketRecommendationsState());
+  }
+
+  function appendMergeLog(message) {
+    const timestamp = new Date().toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    setMergePlanner((prev) => ({
+      ...prev,
+      logs: [...prev.logs, `[${timestamp}] ${message}`].slice(-120),
+    }));
+  }
+
+  function updateMergeStage(stageId, state, detail) {
+    setMergePlanner((prev) => ({
+      ...prev,
+      stages: prev.stages.map((stage) =>
+        stage.id === stageId
+          ? { ...stage, state, detail: typeof detail === "string" && detail.trim() ? detail.trim() : stage.detail }
+          : stage),
+    }));
+  }
+
+  function updateMergePlannerBudget(value) {
+    setMergePlanner((prev) => ({
+      ...prev,
+      budgetInput: value,
+    }));
   }
 
   function commitCurrentSystemHistory(source = "manual") {
@@ -502,6 +550,168 @@ export function useAppController() {
     }
   }
 
+  async function loadMergePlannerData() {
+    setMergePlanner((prev) => ({
+      ...createDefaultMergePlannerState(),
+      rawInventoryMiners: prev.rawInventoryMiners,
+      rawInventoryParts: prev.rawInventoryParts,
+      rawRecipes: prev.rawRecipes,
+      budgetInput: prev.budgetInput,
+      loading: true,
+      status: "Checking RollerCoin session for merge planner...",
+    }));
+    updateMergeStage("auth", "loading", "Checking RollerCoin session...");
+    appendMergeLog("Merge planner load requested.");
+
+    try {
+      let authResult = await checkAuth(true, { cookieHeader: marketRef.current.cookieHeader });
+      appendMergeLog(authResult?.authenticated ? "Auth check succeeded." : `Auth check reported invalid session: ${authResult?.message || "unknown reason"}.`);
+      if (!authResult?.authenticated) {
+        updateMergeStage("auth", "loading", "Stored session was invalid. Opening login flow...");
+        authResult = await loginToRollerCoin();
+        appendMergeLog(authResult?.authenticated ? "Login flow restored session." : `Login flow did not restore session: ${authResult?.message || "unknown reason"}.`);
+      }
+      if (!authResult?.authenticated) {
+        setMergePlanner((prev) => ({
+          ...prev,
+          loading: false,
+          status: authResult?.message || "RollerCoin login is required before loading merge planner data.",
+        }));
+        updateMergeStage("auth", "error", authResult?.message || "Session is not authorized.");
+        appendMergeLog(authResult?.message || "Merge planner stopped because session is not authorized.");
+        return;
+      }
+      updateMergeStage("auth", "success", "RollerCoin session is active.");
+
+      const activeCookieHeader =
+        typeof authResult.cookieHeader === "string" && authResult.cookieHeader.trim()
+          ? authResult.cookieHeader.trim()
+          : marketRef.current.cookieHeader;
+
+      setMergePlanner((prev) => ({
+        ...prev,
+        loading: true,
+        status: "Loading room, inventory miners, parts, and forge recipes step by step...",
+      }));
+
+      let roomResult;
+      updateMergeStage("room", "loading", marketRef.current.roomMiners.length > 0 ? "Reusing room miners already loaded in Market Scanner..." : "Loading room miners from RollerCoin...");
+      appendMergeLog(marketRef.current.roomMiners.length > 0 ? "Reusing cached room miners from Market Scanner." : "Loading room miners from RollerCoin.");
+      roomResult = marketRef.current.roomMiners.length > 0
+        ? { success: true, roomMiners: marketRef.current.roomMiners, reused: true, sourcePath: "market-room-cache", cookieCount: 0, attempts: [] }
+        : await loadRoomMiners({ cookieHeader: activeCookieHeader });
+      updateMergeStage(
+        "room",
+        roomResult?.success ? "success" : "error",
+        roomResult?.success
+          ? `Loaded ${Array.isArray(roomResult.roomMiners) ? roomResult.roomMiners.length : marketRef.current.roomMiners.length} room miners${roomResult?.reused ? " from Market Scanner cache" : ""}.`
+          : `Room miners load failed: ${roomResult?.error || "unknown error"}`,
+      );
+      appendMergeLog(roomResult?.success ? "Room miners step finished." : `Room miners step failed: ${roomResult?.error || "unknown error"}.`);
+
+      updateMergeStage("inventoryMiners", "loading", "Loading inventory miners from storage...");
+      appendMergeLog("Loading storage inventory miners.");
+      const inventoryMinersResult = await invokeInventoryMiners(activeCookieHeader);
+      updateMergeStage(
+        "inventoryMiners",
+        inventoryMinersResult?.success ? "success" : "error",
+        inventoryMinersResult?.success
+          ? `Loaded ${Array.isArray(inventoryMinersResult.items) ? inventoryMinersResult.items.length : 0} inventory miner entries.`
+          : `Inventory miners load failed: ${inventoryMinersResult?.error || "unknown error"}`,
+      );
+      appendMergeLog(
+        inventoryMinersResult?.success
+          ? `Inventory miners loaded (${Array.isArray(inventoryMinersResult.items) ? inventoryMinersResult.items.length : 0} rows).`
+          : `Inventory miners failed: ${inventoryMinersResult?.error || "unknown error"}.`,
+      );
+
+      updateMergeStage("inventoryParts", "loading", "Loading inventory parts from storage...");
+      appendMergeLog("Loading storage inventory parts.");
+      const inventoryPartsResult = await invokeInventoryParts(activeCookieHeader);
+      updateMergeStage(
+        "inventoryParts",
+        inventoryPartsResult?.success ? "success" : "error",
+        inventoryPartsResult?.success
+          ? `Loaded ${Array.isArray(inventoryPartsResult.items) ? inventoryPartsResult.items.length : 0} inventory part entries.`
+          : `Inventory parts load failed: ${inventoryPartsResult?.error || "unknown error"}`,
+      );
+      appendMergeLog(
+        inventoryPartsResult?.success
+          ? `Inventory parts loaded (${Array.isArray(inventoryPartsResult.items) ? inventoryPartsResult.items.length : 0} rows).`
+          : `Inventory parts failed: ${inventoryPartsResult?.error || "unknown error"}.`,
+      );
+
+      updateMergeStage("recipes", "loading", "Loading merge recipes from forge...");
+      appendMergeLog("Loading forge merge recipes.");
+      const mergeRecipesResult = await invokeMergeCraftingList(activeCookieHeader);
+      updateMergeStage(
+        "recipes",
+        mergeRecipesResult?.success ? (mergeRecipesResult?.partial ? "warning" : "success") : "error",
+        mergeRecipesResult?.success
+          ? `Loaded ${Array.isArray(mergeRecipesResult.recipes) ? mergeRecipesResult.recipes.length : 0} merge recipe entries${mergeRecipesResult?.partial ? " (partial)" : ""}.`
+          : `Merge recipes load failed: ${mergeRecipesResult?.error || "unknown error"}`,
+      );
+      appendMergeLog(
+        mergeRecipesResult?.success
+          ? `Forge recipes loaded (${Array.isArray(mergeRecipesResult.recipes) ? mergeRecipesResult.recipes.length : 0} rows${mergeRecipesResult?.partial ? ", partial" : ""}).`
+          : `Forge recipes failed: ${mergeRecipesResult?.error || "unknown error"}.`,
+      );
+
+      const partial = !roomResult?.success || !inventoryMinersResult?.success || !inventoryPartsResult?.success || !mergeRecipesResult?.success || Boolean(mergeRecipesResult?.partial);
+      setMergePlanner((prev) => ({
+        ...prev,
+        loading: false,
+        status: partial
+          ? "Merge planner loaded with partial data. Review the source statuses below."
+          : "Merge planner data loaded successfully.",
+        inventoryMinersStatus: inventoryMinersResult?.success
+          ? `Loaded ${Array.isArray(inventoryMinersResult.items) ? inventoryMinersResult.items.length : 0} inventory miner entries.`
+          : `Inventory miners load failed: ${inventoryMinersResult?.error || "unknown error"}`,
+        inventoryPartsStatus: inventoryPartsResult?.success
+          ? `Loaded ${Array.isArray(inventoryPartsResult.items) ? inventoryPartsResult.items.length : 0} inventory part entries.`
+          : `Inventory parts load failed: ${inventoryPartsResult?.error || "unknown error"}`,
+        recipesStatus: mergeRecipesResult?.success
+          ? `Loaded ${Array.isArray(mergeRecipesResult.recipes) ? mergeRecipesResult.recipes.length : 0} merge recipe entries.`
+          : `Merge recipes load failed: ${mergeRecipesResult?.error || "unknown error"}`,
+        rawInventoryMiners: inventoryMinersResult?.success && Array.isArray(inventoryMinersResult.items)
+          ? inventoryMinersResult.items
+          : prev.rawInventoryMiners,
+        rawInventoryParts: inventoryPartsResult?.success && Array.isArray(inventoryPartsResult.items)
+          ? inventoryPartsResult.items
+          : prev.rawInventoryParts,
+        rawRecipes: mergeRecipesResult?.success && Array.isArray(mergeRecipesResult.recipes)
+          ? mergeRecipesResult.recipes
+          : prev.rawRecipes,
+        lastLoadedAt: Date.now(),
+        partial,
+        diagnostics: {
+          room: {
+            success: Boolean(roomResult?.success),
+            sourcePath: roomResult?.sourcePath || (roomResult?.reused ? "market-room-cache" : ""),
+            payloadCount: Array.isArray(roomResult?.roomMiners) ? roomResult.roomMiners.length : 0,
+            error: roomResult?.error || "",
+            attemptSummary: Array.isArray(roomResult?.attempts) && roomResult.attempts.length > 0
+              ? `Attempts: ${roomResult.attempts.length}`
+              : roomResult?.reused
+                ? "Reused room miners from Market Scanner."
+                : "No attempt metadata returned.",
+          },
+          inventoryMiners: buildMergePlannerDiagnostics(inventoryMinersResult, "items"),
+          inventoryParts: buildMergePlannerDiagnostics(inventoryPartsResult, "items"),
+          recipes: buildMergePlannerDiagnostics(mergeRecipesResult, "recipes"),
+        },
+      }));
+      appendMergeLog(partial ? "Merge planner finished with partial data." : "Merge planner finished successfully.");
+    } catch (error) {
+      setMergePlanner((prev) => ({
+        ...prev,
+        loading: false,
+        status: `Merge planner load failed: ${error.message}`,
+      }));
+      appendMergeLog(`Merge planner crashed: ${error.message}`);
+    }
+  }
+
   async function loadMarketMiners(options = {}) {
     const marketState = marketRef.current;
     const requestId = `market-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -805,6 +1015,8 @@ export function useAppController() {
     market,
     comparison,
     comparisonAnalysis,
+    mergePlanner,
+    mergeAnalysis,
     recommendations,
     actions: {
       updateCurrentSystemField,
@@ -825,6 +1037,8 @@ export function useAppController() {
       loginToRollerCoin,
       syncCurrentPower,
       loadRoomMiners,
+      loadMergePlannerData,
+      updateMergePlannerBudget,
       checkForUpdates,
       loadMarketMiners,
       findBestMarketOptions,
