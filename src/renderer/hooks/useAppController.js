@@ -39,6 +39,15 @@ import {
   restoreCurrentSystemHistory,
   restoreCurrentSystemState,
 } from "../lib/power";
+import {
+  buildProfitabilityRows,
+  buildProfitabilitySummary,
+  DEFAULT_LEAGUE_ID,
+  invokeLeagueProfitability,
+  persistProfitabilityHistory,
+  recordProfitabilityHistory,
+  restoreProfitabilityHistory,
+} from "../lib/profitability";
 import { writeRendererLog } from "../lib/runtime";
 
 const DEFAULT_COMPARISON = {
@@ -76,6 +85,21 @@ function createEmptyMarketRecommendationsState() {
   };
 }
 
+function createDefaultProfitabilityState() {
+  return {
+    leagueId: DEFAULT_LEAGUE_ID,
+    loading: false,
+    status: "League profitability is not loaded.",
+    rows: [],
+    summary: buildProfitabilitySummary([], null),
+    userDistribution: null,
+    distribution: [],
+    prices: {},
+    sourceInfo: null,
+    priceError: "",
+  };
+}
+
 export function useAppController() {
   const [currentSystem, setCurrentSystem] = useState(() => restoreCurrentSystemState());
   const [currentSystemHistory, setCurrentSystemHistory] = useState(() => restoreCurrentSystemHistory());
@@ -94,6 +118,8 @@ export function useAppController() {
   const [comparison, setComparison] = useState(DEFAULT_COMPARISON);
   const [marketRecommendations, setMarketRecommendations] = useState(() => createEmptyMarketRecommendationsState());
   const [mergePlanner, setMergePlanner] = useState(() => createDefaultMergePlannerState());
+  const [profitability, setProfitability] = useState(() => createDefaultProfitabilityState());
+  const [profitabilityHistory, setProfitabilityHistory] = useState(() => restoreProfitabilityHistory());
   const marketHeartbeatRef = useRef(null);
   const marketRef = useRef(market);
   const currentSystemRef = useRef(currentSystem);
@@ -121,6 +147,10 @@ export function useAppController() {
       saveMarketMinersCache(market.marketCatalog, market.marketSourceInfo);
     }
   }, [market.marketCatalog, market.marketSourceInfo]);
+
+  useEffect(() => {
+    persistProfitabilityHistory(profitabilityHistory);
+  }, [profitabilityHistory]);
 
   useEffect(() => {
     const unsubscribe = subscribeMarketProgress((payload) => {
@@ -252,6 +282,14 @@ export function useAppController() {
     setMarket((prev) => ({ ...prev, primaryTab }));
   }
 
+  function updateProfitabilityLeagueId(value) {
+    setProfitability((prev) => ({
+      ...prev,
+      leagueId: value,
+      status: prev.rows.length > 0 ? "League changed. Refresh profitability to update rewards." : prev.status,
+    }));
+  }
+
   function setMarketViewTab(marketViewTab) {
     setMarket((prev) => ({ ...prev, marketViewTab }));
   }
@@ -360,11 +398,24 @@ export function useAppController() {
   }
 
   async function handleAuthAction() {
+    let authResult;
     if (market.authStatus === "invalid") {
-      await loginToRollerCoin();
-      return;
+      authResult = await loginToRollerCoin();
+    } else {
+      authResult = await checkAuth(false);
     }
-    await checkAuth(false);
+
+    if (authResult?.authenticated) {
+      const activeCookieHeader =
+        typeof authResult.cookieHeader === "string" && authResult.cookieHeader.trim()
+          ? authResult.cookieHeader.trim()
+          : marketRef.current.cookieHeader;
+      void refreshLeagueProfitabilityWithCookie(activeCookieHeader, {
+        loadingStatus: "Loading profitability after login...",
+        successPrefix: "Profitability loaded after login.",
+        failurePrefix: "Profitability refresh after login failed",
+      });
+    }
   }
 
   async function loginToRollerCoin() {
@@ -456,6 +507,11 @@ export function useAppController() {
         marketSummary: "",
       }));
       clearMarketRecommendations();
+      void refreshLeagueProfitabilityWithCookie(marketRef.current.cookieHeader || market.cookieHeader, {
+        loadingStatus: "Refreshing profitability after power sync...",
+        successPrefix: "Profitability recalculated after power sync.",
+        failurePrefix: "Profitability refresh after power sync failed",
+      });
     } catch (error) {
       setMarket((prev) => ({
         ...prev,
@@ -722,6 +778,95 @@ export function useAppController() {
     }
   }
 
+  async function refreshLeagueProfitabilityWithCookie(cookieHeader, options = {}) {
+    const leagueId = String(options.leagueId || profitability.leagueId || "").trim();
+    const loadingStatus = options.loadingStatus || "Loading league power and crypto prices...";
+    const successPrefix = options.successPrefix || "Profitability loaded.";
+    const failurePrefix = options.failurePrefix || "Profitability load failed";
+
+    setProfitability((prev) => ({
+      ...prev,
+      loading: true,
+      status: loadingStatus,
+      priceError: "",
+    }));
+
+    try {
+      const result = await invokeLeagueProfitability(cookieHeader, leagueId);
+      if (!result?.success) {
+        throw new Error(result?.error || "Failed to load league profitability.");
+      }
+
+      const rows = buildProfitabilityRows(result.distribution, result.userDistribution, result.prices);
+      const summary = buildProfitabilitySummary(rows, result.userDistribution);
+      const bestText = summary.best
+        ? ` Best daily estimate: ${summary.best.symbol} at $${Number(summary.best.usdPerDay).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}.`
+        : Number.isFinite(Number(summary.userPower)) && Number(summary.userPower) > 0
+          ? " No priced rewards were calculated."
+          : " User power was not detected in the league response.";
+
+      setProfitability((prev) => ({
+        ...prev,
+        loading: false,
+        leagueId: result.leagueId || leagueId,
+        status: `${successPrefix}${bestText}`,
+        rows,
+        summary,
+        userDistribution: result.userDistribution || null,
+        distribution: Array.isArray(result.distribution) ? result.distribution : [],
+        prices: result.prices || {},
+        sourceInfo: result.sourceInfo || null,
+        priceError: result.priceError || "",
+      }));
+      setProfitabilityHistory((prev) => recordProfitabilityHistory(prev, rows, summary, {
+        leagueId: result.leagueId || leagueId,
+        source: options.historySource || "sync",
+      }));
+      return { success: true, rows, summary };
+    } catch (error) {
+      setProfitability((prev) => ({
+        ...prev,
+        loading: false,
+        status: `${failurePrefix}: ${error.message}`,
+      }));
+      return { success: false, error: error.message };
+    }
+  }
+
+  async function loadLeagueProfitability() {
+    const leagueId = String(profitability.leagueId || "").trim();
+    setProfitability((prev) => ({
+      ...prev,
+      loading: true,
+      status: "Checking RollerCoin session for profitability...",
+      priceError: "",
+    }));
+
+    try {
+      let authResult = await checkAuth(true, { cookieHeader: marketRef.current.cookieHeader });
+      if (!authResult?.authenticated) {
+        authResult = await loginToRollerCoin();
+      }
+      if (!authResult?.authenticated) {
+        throw new Error(authResult?.message || "RollerCoin session is not authorized.");
+      }
+
+      const activeCookieHeader =
+        typeof authResult.cookieHeader === "string" && authResult.cookieHeader.trim()
+          ? authResult.cookieHeader.trim()
+          : marketRef.current.cookieHeader;
+
+      return refreshLeagueProfitabilityWithCookie(activeCookieHeader, { leagueId });
+    } catch (error) {
+      setProfitability((prev) => ({
+        ...prev,
+        loading: false,
+        status: `Profitability load failed: ${error.message}`,
+      }));
+      return { success: false, error: error.message };
+    }
+  }
+
   async function loadMarketMiners(options = {}) {
     const marketState = marketRef.current;
     const requestId = `market-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -967,6 +1112,12 @@ export function useAppController() {
           marketStatus: "Authorization confirmed. Loading room miners automatically...",
         }));
 
+        void refreshLeagueProfitabilityWithCookie(activeCookieHeader, {
+          loadingStatus: "Loading profitability automatically after login...",
+          successPrefix: "Profitability loaded automatically.",
+          failurePrefix: "Automatic profitability refresh failed",
+        });
+
         const roomLoadResult = await loadRoomMiners({ cookieHeader: activeCookieHeader });
         if (cancelled) return;
 
@@ -1027,6 +1178,8 @@ export function useAppController() {
     comparisonAnalysis,
     mergePlanner,
     mergeAnalysis,
+    profitability,
+    profitabilityHistory,
     recommendations,
     actions: {
       updateCurrentSystemField,
@@ -1038,6 +1191,7 @@ export function useAppController() {
       removeCandidate,
       updateCandidate,
       setPrimaryTab,
+      updateProfitabilityLeagueId,
       setMarketViewTab,
       updateMarketSetting,
       showMoreRoomMiners,
@@ -1048,6 +1202,7 @@ export function useAppController() {
       syncCurrentPower,
       loadRoomMiners,
       loadMergePlannerData,
+      loadLeagueProfitability,
       updateMergePlannerBudget,
       checkForUpdates,
       loadMarketMiners,

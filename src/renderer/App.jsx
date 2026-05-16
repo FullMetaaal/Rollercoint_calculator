@@ -5,6 +5,7 @@ import { ComparisonSection } from "./components/ComparisonSection";
 import { CurrentSystemSection } from "./components/CurrentSystemSection";
 import { MarketSection } from "./components/MarketSection";
 import { MergePlannerSection } from "./components/MergePlannerSection";
+import { ProfitabilitySection } from "./components/ProfitabilitySection";
 import { useAppController } from "./hooks/useAppController";
 import { createI18n, persistLocale, restoreLocale } from "./lib/i18n";
 import { writeRendererLog } from "./lib/runtime";
@@ -25,6 +26,8 @@ export default function App() {
     comparisonAnalysis,
     mergePlanner,
     mergeAnalysis,
+    profitability,
+    profitabilityHistory,
     recommendations,
     actions,
   } = useAppController();
@@ -43,6 +46,8 @@ export default function App() {
   const workspaceNavKey =
     market.primaryTab === "comparison"
       ? "comparison"
+      : market.primaryTab === "profitability"
+        ? "profitability"
       : market.primaryTab === "merge"
         ? "merge"
         : "market";
@@ -86,6 +91,16 @@ export default function App() {
                 }}
               >
                 {t("nav_merge_planner")}
+              </button>
+              <button
+                type="button"
+                className={`workspace-nav-link ${workspaceNavKey === "profitability" ? "is-active" : ""}`}
+                onClick={() => {
+                  actions.setPrimaryTab("profitability");
+                  scrollToId("profitabilityTabPanel");
+                }}
+              >
+                {t("nav_profitability")}
               </button>
               <button
                 type="button"
@@ -166,6 +181,14 @@ export default function App() {
                 {t("nav_merge_planner")}
               </button>
               <button
+                id="profitabilityTabBtn"
+                type="button"
+                className={`tab-button ${market.primaryTab === "profitability" ? "is-active" : ""}`}
+                onClick={() => actions.setPrimaryTab("profitability")}
+              >
+                {t("nav_profitability")}
+              </button>
+              <button
                 id="candidatesTabBtn"
                 type="button"
                 className={`tab-button ${market.primaryTab === "comparison" ? "is-active" : ""}`}
@@ -191,6 +214,15 @@ export default function App() {
               mergePlanner={mergePlanner}
               mergeAnalysis={mergeAnalysis}
               displayUnit={currentSystem.displayUnit}
+              actions={actions}
+              i18n={i18n}
+            />
+          </section>
+
+          <section id="profitabilityTabPanel" className={`tab-panel ${market.primaryTab === "profitability" ? "is-active" : ""}`} hidden={market.primaryTab !== "profitability"}>
+            <ProfitabilitySection
+              profitability={profitability}
+              profitabilityHistory={profitabilityHistory}
               actions={actions}
               i18n={i18n}
             />

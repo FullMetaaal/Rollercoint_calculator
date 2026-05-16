@@ -311,6 +311,67 @@ function requestJson(url, timeoutMs = RELEASE_CHECK_TIMEOUT_MS, redirectCount = 
   });
 }
 
+function requestPublicJson(url, options = {}, redirectCount = 0) {
+  const timeoutMs =
+    Number.isFinite(Number(options?.timeoutMs)) && Number(options.timeoutMs) > 0
+      ? Math.floor(Number(options.timeoutMs))
+      : MARKET_REQUEST_TIMEOUT_MS;
+  const headers =
+    options && typeof options.headers === "object" && !Array.isArray(options.headers)
+      ? options.headers
+      : {};
+
+  return new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      {
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          "User-Agent": `${APP_PACKAGE?.name || "roller-coin-calculator"}/${app.getVersion()}`,
+          ...headers,
+        },
+      },
+      (response) => {
+        const statusCode = Number(response.statusCode) || 0;
+        const location = response.headers.location;
+
+        if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+          response.resume();
+          if (redirectCount >= 4) {
+            reject(new Error("Too many redirects while loading public JSON."));
+            return;
+          }
+
+          const redirectUrl = new URL(location, url).toString();
+          resolve(requestPublicJson(redirectUrl, options, redirectCount + 1));
+          return;
+        }
+
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          const rawBody = Buffer.concat(chunks).toString("utf8");
+          if (statusCode < 200 || statusCode >= 300) {
+            reject(new Error(`Public JSON request returned ${statusCode}.`));
+            return;
+          }
+
+          try {
+            resolve(JSON.parse(rawBody));
+          } catch (error) {
+            reject(new Error(`Public JSON request returned invalid JSON: ${error.message}`));
+          }
+        });
+      },
+    );
+
+    request.on("error", reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("Public JSON request timed out."));
+    });
+  });
+}
+
 function requestLatestReleaseRedirect(url, timeoutMs = RELEASE_CHECK_TIMEOUT_MS, redirectCount = 0) {
   return new Promise((resolve, reject) => {
     const request = https.get(
@@ -2572,6 +2633,159 @@ function extractRollercoinObjectArrayPayload(payload, candidatePaths = [], error
   }
 
   throw new Error(errorMessage);
+}
+
+function normalizeLeagueId(value) {
+  const leagueId = String(value || "").trim();
+  if (!/^[a-f0-9]{24}$/i.test(leagueId)) {
+    throw new Error("Invalid league id.");
+  }
+  return leagueId;
+}
+
+function buildLeaguePowerDistributionEndpoint(leagueId) {
+  return `https://rollercoin.com/api/league/league-power-distribution-info?league_id=${encodeURIComponent(leagueId)}`;
+}
+
+function buildUserPowerDistributionEndpoint(leagueId) {
+  return `https://rollercoin.com/api/league/user-power-distribution-info?league_id=${encodeURIComponent(leagueId)}`;
+}
+
+function extractRollercoinObjectPayload(payload, candidatePaths = [], errorMessage = "RollerCoin API returned no object.") {
+  const root = payload && typeof payload === "object" ? payload : null;
+  if (!root || Array.isArray(root)) {
+    throw new Error(errorMessage);
+  }
+
+  const preferredRoots = [root];
+  if (root.data && typeof root.data === "object" && !Array.isArray(root.data)) {
+    preferredRoots.unshift(root.data);
+  }
+
+  for (const candidatePath of candidatePaths) {
+    for (const candidateRoot of preferredRoots) {
+      const value = getByPath(candidateRoot, candidatePath);
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        return value;
+      }
+    }
+  }
+
+  if (
+    root.data &&
+    typeof root.data === "object" &&
+    !Array.isArray(root.data) &&
+    Object.keys(root.data).length > 0
+  ) {
+    return root.data;
+  }
+
+  return root;
+}
+
+const LEAGUE_PROFITABILITY_MARKET_IDS = [
+  "bitcoin",
+  "litecoin",
+  "binancecoin",
+  "polygon-ecosystem-token",
+  "ripple",
+  "dogecoin",
+  "ethereum",
+  "tron",
+  "solana",
+  "tether",
+];
+
+async function fetchCryptoUsdPrices() {
+  const params = new URLSearchParams({
+    ids: LEAGUE_PROFITABILITY_MARKET_IDS.join(","),
+    vs_currencies: "usd",
+    include_last_updated_at: "true",
+    precision: "full",
+  });
+  const endpoint = `https://api.coingecko.com/api/v3/simple/price?${params.toString()}`;
+  const json = await requestPublicJson(endpoint, {
+    timeoutMs: 10000,
+    headers: {
+      "Cache-Control": "no-cache",
+    },
+  });
+
+  return {
+    endpoint,
+    prices: json && typeof json === "object" && !Array.isArray(json) ? json : {},
+  };
+}
+
+async function fetchRollercoinLeagueProfitability(preferredCookieHeader = "", rawLeagueId = "") {
+  const leagueId = normalizeLeagueId(rawLeagueId);
+  const leagueEndpoint = buildLeaguePowerDistributionEndpoint(leagueId);
+  const userEndpoint = buildUserPowerDistributionEndpoint(leagueId);
+
+  const [leagueResult, userResult, priceResult] = await Promise.all([
+    fetchRollercoinJsonEndpoint(preferredCookieHeader, leagueEndpoint, {
+      bootstrapUrl: "https://rollercoin.com/",
+      referrer: "https://rollercoin.com/",
+      sourcePathDirect: "direct-league-power-distribution-api",
+      sourcePathBrowser: "browser-league-power-distribution-api",
+      sourcePathDebugger: "debugger-league-power-distribution-api",
+      stepLabelPrefix: "league-power-distribution",
+      workerTitle: "RollerCoin League Power Worker",
+      failureMessage: "RollerCoin league power API rejected the session.",
+    }),
+    fetchRollercoinJsonEndpoint(preferredCookieHeader, userEndpoint, {
+      bootstrapUrl: "https://rollercoin.com/",
+      referrer: "https://rollercoin.com/",
+      sourcePathDirect: "direct-user-league-power-api",
+      sourcePathBrowser: "browser-user-league-power-api",
+      sourcePathDebugger: "debugger-user-league-power-api",
+      stepLabelPrefix: "user-league-power",
+      workerTitle: "RollerCoin User League Power Worker",
+      failureMessage: "RollerCoin user league power API rejected the session.",
+    }),
+    fetchCryptoUsdPrices().catch((error) => ({
+      endpoint: "https://api.coingecko.com/api/v3/simple/price",
+      prices: {},
+      error: error.message,
+    })),
+  ]);
+
+  if (!leagueResult?.success) {
+    throw new Error(leagueResult?.error || "Failed to load league power distribution.");
+  }
+  if (!userResult?.success) {
+    throw new Error(userResult?.error || "Failed to load user power distribution.");
+  }
+
+  const distribution = extractRollercoinObjectArrayPayload(
+    leagueResult.json,
+    ["items", "currencies", "distribution", "result", "list"],
+    "League power API returned no currencies.",
+  );
+  const userDistribution = extractRollercoinObjectPayload(
+    userResult.json,
+    ["user", "power", "distribution", "result"],
+    "User power API returned no current allocation.",
+  );
+
+  return {
+    success: true,
+    leagueId,
+    distribution,
+    userDistribution,
+    prices: priceResult.prices || {},
+    priceEndpoint: priceResult.endpoint || "",
+    priceError: priceResult.error || "",
+    sourceInfo: {
+      leagueEndpoint,
+      userEndpoint,
+      leagueSourcePath: leagueResult.sourcePath || "",
+      userSourcePath: userResult.sourcePath || "",
+      selectedAuthVariant: userResult.selectedAuthVariant || leagueResult.selectedAuthVariant || null,
+      cookieCount: Math.max(Number(leagueResult.cookieCount) || 0, Number(userResult.cookieCount) || 0),
+      loadedAt: Date.now(),
+    },
+  };
 }
 
 function buildRollercoinInventoryEndpoint(kind = "miners", skip = 0, limit = 24) {
@@ -7439,6 +7653,17 @@ if (hasSingleInstanceLock) {
           ? payload.cookieHeader || ""
           : "";
       return fetchRollercoinMergeCraftingList(cookieHeader);
+    });
+    ipcMain.handle("rollercoin-league-profitability-fetch", async (_event, payload) => {
+      const cookieHeader =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload.cookieHeader || ""
+          : "";
+      const leagueId =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload.leagueId || ""
+          : "";
+      return fetchRollercoinLeagueProfitability(cookieHeader, leagueId);
     });
     ipcMain.handle("rollercoin-market-fetch", async (event, payload) => {
       const requestId =
