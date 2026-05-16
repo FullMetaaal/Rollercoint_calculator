@@ -12,6 +12,7 @@ import {
   appendMarketLog,
   buildMarketRecommendations,
   buildMarketRefreshPlan,
+  clearMarketMinersCache,
   createDefaultMarketState,
   invokeAppUpdateCheck,
   invokeAuthLogin,
@@ -27,6 +28,7 @@ import {
   saveMarketMinersCache,
   sortRoomMinersCollection,
   subscribeMarketProgress,
+  MARKET_DIRECT_MAX_PAGES,
   TABLE_RENDER_BATCH_SIZE,
 } from "../lib/market";
 import {
@@ -869,30 +871,54 @@ export function useAppController() {
 
   async function loadMarketMiners(options = {}) {
     const marketState = marketRef.current;
+    const loadOptions = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+    const forceFresh = loadOptions.forceFresh === true;
     const requestId = `market-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const refreshPlan = buildMarketRefreshPlan(marketState.marketSourceInfo);
+    const refreshPlan = forceFresh
+      ? [{
+        mode: "full",
+        maxPages: MARKET_DIRECT_MAX_PAGES,
+        includeAttempts: true,
+        label: "Fresh full market sync",
+      }]
+      : buildMarketRefreshPlan(marketState.marketSourceInfo);
     const previousCatalog = marketState.marketCatalog;
     const previousMiners = marketState.marketMiners;
     const previousSourceInfo = marketState.marketSourceInfo;
+    const initialCatalog = forceFresh ? [] : previousCatalog;
+    const initialMiners = forceFresh ? [] : previousMiners;
+    const initialSourceInfo = forceFresh ? null : previousSourceInfo;
     const cookieHeader =
-      typeof options.cookieHeader === "string"
-        ? options.cookieHeader.trim()
+      typeof loadOptions.cookieHeader === "string"
+        ? loadOptions.cookieHeader.trim()
         : marketState.cookieHeader;
 
     if (marketHeartbeatRef.current) {
       clearInterval(marketHeartbeatRef.current);
     }
 
+    if (forceFresh) {
+      clearMarketMinersCache();
+    }
+
     setMarket((prev) => ({
       ...prev,
       marketLoading: true,
       activeRequestId: requestId,
+      marketCatalog: forceFresh ? [] : prev.marketCatalog,
+      marketMiners: forceFresh ? [] : prev.marketMiners,
+      marketSourceInfo: forceFresh ? null : prev.marketSourceInfo,
       marketLogs: [
         `[${new Date().toLocaleTimeString("en-US", { hour12: false })}] [INFO] Load miners requested by user.`,
+        forceFresh
+          ? `[${new Date().toLocaleTimeString("en-US", { hour12: false })}] [INFO] Local market cache cleared before loading.`
+          : null,
         `[${new Date().toLocaleTimeString("en-US", { hour12: false })}] [INFO] Request ID: ${requestId}`,
-      ],
+      ].filter(Boolean),
       marketStatus:
-        prev.marketMiners.length > 0
+        forceFresh
+          ? "Local market cache cleared. Loading a fresh full market snapshot..."
+          : prev.marketMiners.length > 0
           ? `Refreshing market using cached data (${prev.marketMiners.length} miners).`
           : "Loading miners from market API. Direct mode runs first, browser mode is the fallback...",
       marketSummary: "",
@@ -908,9 +934,9 @@ export function useAppController() {
     }, 15000);
 
     try {
-      let mergedCatalog = previousCatalog;
-      let mergedSourceInfo = previousSourceInfo;
-      let mergedActiveMiners = previousMiners;
+      let mergedCatalog = initialCatalog;
+      let mergedSourceInfo = initialSourceInfo;
+      let mergedActiveMiners = initialMiners;
       let hadSuccess = false;
 
       for (const phase of refreshPlan) {
@@ -924,6 +950,7 @@ export function useAppController() {
           refreshMode: phase.mode,
           maxPages: phase.maxPages,
           includeAttempts: phase.includeAttempts,
+          bypassCache: forceFresh,
         });
 
         const rawMiners = Array.isArray(loadResult?.marketplaceOffers)
@@ -984,11 +1011,13 @@ export function useAppController() {
     } catch (error) {
       setMarket((prev) => ({
         ...prev,
-        marketCatalog: previousCatalog,
-        marketMiners: previousMiners,
-        marketSourceInfo: previousSourceInfo,
+        marketCatalog: forceFresh ? [] : previousCatalog,
+        marketMiners: forceFresh ? [] : previousMiners,
+        marketSourceInfo: forceFresh ? null : previousSourceInfo,
         marketStatus:
-          previousMiners.length > 0
+          forceFresh
+            ? `Fresh market load failed: ${error.message}. Cache stays empty to avoid stale prices.`
+            : previousMiners.length > 0
             ? `Refresh failed: ${error.message}. Showing cached miners.`
             : `Failed to load market miners: ${error.message}`,
         marketSummary: "",
@@ -996,9 +1025,9 @@ export function useAppController() {
       }));
       return {
         success: false,
-        marketCatalog: previousCatalog,
-        marketMiners: previousMiners,
-        marketSourceInfo: previousSourceInfo,
+        marketCatalog: forceFresh ? [] : previousCatalog,
+        marketMiners: forceFresh ? [] : previousMiners,
+        marketSourceInfo: forceFresh ? null : previousSourceInfo,
         error: error.message,
       };
     } finally {

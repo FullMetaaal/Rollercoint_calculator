@@ -65,6 +65,7 @@ function normalizeMarketFetchOptions(options = {}) {
     refreshMode,
     maxPages,
     includeAttempts: options?.includeAttempts !== false,
+    bypassCache: options?.bypassCache === true,
   };
 }
 
@@ -189,6 +190,39 @@ function attachRollercoinAssetRequestHeaders(targetSession) {
       callback({ requestHeaders });
     },
   );
+}
+
+async function clearRollercoinMarketRequestCaches(progress = null) {
+  const sessions = [
+    session.defaultSession,
+    session.fromPartition(ROLLERCOIN_PARTITION),
+  ].filter(Boolean);
+
+  const tasks = [];
+  sessions.forEach((targetSession) => {
+    if (typeof targetSession.clearCache === "function") {
+      tasks.push(targetSession.clearCache());
+    }
+    if (typeof targetSession.clearStorageData === "function") {
+      tasks.push(targetSession.clearStorageData({
+        origin: "https://rollercoin.com",
+        storages: ["appcache", "cachestorage", "serviceworkers"],
+      }));
+    }
+  });
+
+  const results = await Promise.allSettled(tasks);
+  const rejected = results.filter((result) => result.status === "rejected");
+  if (progress) {
+    if (rejected.length === 0) {
+      progress("RollerCoin HTTP and browser cache cleared before market request.", "info");
+    } else {
+      progress(
+        `RollerCoin cache clear finished with ${rejected.length} warning(s); continuing with cache-busted requests.`,
+        "warn",
+      );
+    }
+  }
 }
 
 configureStoragePaths();
@@ -2137,7 +2171,7 @@ function requestJsonWithCookieHeader(url, cookieHeader, options = {}) {
         headers: {
           Accept: "application/json, text/plain, */*",
           Cookie: cookieHeader,
-          "Cache-Control": "no-cache",
+          "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
           Origin: "https://rollercoin.com",
           Pragma: "no-cache",
           Referer: "https://rollercoin.com/marketplace/buy?itemType=miner",
@@ -3064,7 +3098,7 @@ async function fetchMarketMinersViaDirectApi(preferredCookieHeader = "", progres
   let sawAnyProbeJson = false;
   let sawAnyProbeRows = false;
   for (const profile of queryProfiles) {
-    const url = buildMarketplaceSaleOrdersUrl(1, profile);
+    const url = `${buildMarketplaceSaleOrdersUrl(1, profile)}&_=${Date.now()}-${Math.random().toString(36).slice(2)}`;
     if (progress) {
       progress(`Direct API probe (${profile.label})...`);
     }
@@ -4141,15 +4175,16 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
                     attempts,
                   };
                 }
-                const probeUrl = buildUrl(1, profile);
+                const probeUrl = withCacheBust(buildUrl(1, profile), 1, probePass);
                 let probeResponse;
                 try {
                   probeResponse = await fetchWithTimeout(probeUrl, {
                     method: "GET",
                     credentials: "include",
+                    cache: "no-store",
                     headers: {
                       Accept: "application/json, text/plain, */*",
-                      "Cache-Control": "no-cache",
+                      "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
                       Pragma: "no-cache",
                       ...variant.headers,
                     },
@@ -4245,7 +4280,7 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
                       cache: "no-store",
                       headers: {
                         Accept: "application/json, text/plain, */*",
-                        "Cache-Control": "no-cache",
+                        "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
                         Pragma: "no-cache",
                         ...selectedHeaderVariant.headers,
                       },
@@ -6369,8 +6404,15 @@ async function captureJsonViaDebugger(endpoints, navigateUrl, options = {}) {
 
 async function fetchMarketViaSession(options = {}, progress = null) {
   const normalizedOptions = normalizeMarketFetchOptions(options);
+  if (normalizedOptions.bypassCache) {
+    await clearRollercoinMarketRequestCaches(progress);
+  }
   if (progress) {
-    progress(`Market fetch started in ${normalizedOptions.refreshMode} mode. Trying direct market API first.`);
+    progress(
+      `Market fetch started in ${normalizedOptions.refreshMode} mode. ` +
+        `${normalizedOptions.bypassCache ? "Bypassing local/browser cache. " : ""}` +
+        "Trying direct market API first.",
+    );
   }
 
   const cookieHeader =
@@ -7686,13 +7728,18 @@ if (hasSingleInstanceLock) {
         payload && typeof payload === "object" && !Array.isArray(payload)
           ? payload.includeAttempts !== false
           : true;
+      const bypassCache =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload.bypassCache === true
+          : false;
 
       const progress = (message, level = "info", extra = {}) => {
         emitMarketProgress(event.sender, requestId, message, level, extra);
       };
 
       progress(
-        `Request accepted. Starting market miners loading flow (${normalizeMarketRefreshMode(refreshMode)} mode)...`,
+        `Request accepted. Starting market miners loading flow (${normalizeMarketRefreshMode(refreshMode)} mode` +
+          `${bypassCache ? ", cache bypass" : ""})...`,
       );
       try {
         return await fetchMarketViaSession({
@@ -7700,6 +7747,7 @@ if (hasSingleInstanceLock) {
           refreshMode,
           maxPages,
           includeAttempts,
+          bypassCache,
         }, progress);
       } finally {
         clearMarketProgressState(event.sender, requestId);

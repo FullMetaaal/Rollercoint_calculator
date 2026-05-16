@@ -665,7 +665,7 @@ export function MarketSection({ market, recommendations, displayUnit, actions, i
               </div>
             </div>
             <div className="tool-action-stack">
-              <button id="loadMarketMinersBtn" type="button" className="ghost" onClick={actions.loadMarketMiners} disabled={market.marketLoading}>
+              <button id="loadMarketMinersBtn" type="button" className="ghost" onClick={() => actions.loadMarketMiners({ forceFresh: true })} disabled={market.marketLoading}>
                 {market.marketLoading ? t("auth_checking") : t("load_market_miners")}
               </button>
               <button id="findBestMarketBtn" type="button" className="primary" onClick={actions.findBestMarketOptions}>

@@ -1149,6 +1149,21 @@ export function saveMarketMinersCache(catalog, sourceInfo) {
   }
 }
 
+export function clearMarketMinersCache() {
+  const fs = getFs();
+  const filePath = getCachePath();
+  if (!fs || !filePath) return false;
+
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function shouldRunFullMarketRefresh(sourceInfo) {
   const fullRefreshedAt = Number(sourceInfo?.fullRefreshedAt);
   if (!Number.isFinite(fullRefreshedAt)) return true;
@@ -1233,6 +1248,7 @@ export async function invokeMarketFetch(cookieHeader, requestId, options = {}) {
     refreshMode: options.refreshMode || "full",
     maxPages: options.maxPages || MARKET_DIRECT_MAX_PAGES,
     includeAttempts: options.includeAttempts !== false,
+    bypassCache: options.bypassCache === true,
   });
 }
 
