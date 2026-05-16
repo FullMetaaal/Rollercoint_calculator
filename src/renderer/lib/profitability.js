@@ -104,6 +104,59 @@ function getCurrencyConfig(currency) {
   };
 }
 
+function buildCurrencyLookupKeys(currency, config = {}) {
+  const rawKeys = [
+    currency,
+    String(currency || "").replace(/_SMALL$/i, ""),
+    config.symbol,
+    config.name,
+    config.icon,
+    config.marketId,
+  ];
+
+  return rawKeys
+    .map((value) => String(value || "").trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function addCurrencyConfigLookupKey(lookup, key, config) {
+  const normalizedKey = String(key || "").trim().toUpperCase();
+  if (!normalizedKey || lookup.has(normalizedKey)) return;
+  lookup.set(normalizedKey, config);
+}
+
+function buildWithdrawalConfigLookup(currenciesConfig) {
+  const lookup = new Map();
+  (Array.isArray(currenciesConfig) ? currenciesConfig : [])
+    .filter((entry) => entry && typeof entry === "object")
+    .forEach((entry) => {
+      const minimumWithdraw = normalizeFiniteNumber(entry.min);
+      if (!Number.isFinite(minimumWithdraw) || minimumWithdraw <= 0) return;
+
+      const normalized = {
+        minimumWithdraw,
+        precision: normalizeFiniteNumber(entry.precision),
+        raw: entry,
+      };
+
+      [
+        entry.balance_key,
+        entry.code,
+        entry.base_currency,
+        entry.validation_name,
+        entry.name,
+        entry.fullname,
+        entry.display_name,
+        entry.name_displayed_in_exp_reward,
+      ].forEach((key) => {
+        addCurrencyConfigLookupKey(lookup, key, normalized);
+        addCurrencyConfigLookupKey(lookup, String(key || "").replace(/_SMALL$/i, ""), normalized);
+      });
+    });
+
+  return lookup;
+}
+
 export function buildCurrencyIconUrl(currency) {
   const config = getCurrencyConfig(currency);
   return `https://static.rollercoin.com/static/img/icons/currencies/${encodeURIComponent(config.icon)}.svg?v=1.13`;
@@ -228,10 +281,11 @@ export function formatLeaguePower(value) {
   return `${formatMarketValue(numericValue / unit.divisor, 3)} ${unit.label}`;
 }
 
-export function buildProfitabilityRows(distribution, userDistribution, pricesByMarketId = {}) {
+export function buildProfitabilityRows(distribution, userDistribution, pricesByMarketId = {}, currenciesConfig = []) {
   const normalizedUser = normalizeUserDistribution(userDistribution);
   const userCurrency = normalizedUser.currentCurrency;
   const userPower = normalizeFiniteNumber(normalizedUser.userPower);
+  const withdrawalConfigLookup = buildWithdrawalConfigLookup(currenciesConfig);
 
   return (Array.isArray(distribution) ? distribution : [])
     .filter((entry) => entry && typeof entry === "object")
@@ -239,6 +293,9 @@ export function buildProfitabilityRows(distribution, userDistribution, pricesByM
     .map((entry) => {
       const currency = String(entry.currency || "").trim().toUpperCase();
       const config = getCurrencyConfig(currency);
+      const withdrawalConfig = buildCurrencyLookupKeys(currency, config)
+        .map((key) => withdrawalConfigLookup.get(key))
+        .find(Boolean);
       const totalPower = normalizeFiniteNumber(entry.total_power);
       const blockPayoutRaw = normalizeFiniteNumber(entry.block_payout);
       const sameCurrency = currency === userCurrency;
@@ -267,6 +324,14 @@ export function buildProfitabilityRows(distribution, userDistribution, pricesByM
       const priceUpdatedAt = Number(pricesByMarketId?.[config.marketId]?.last_updated_at);
       const usdPerBlock = toUsd(rewardPerBlock, usdPrice);
       const blockPayoutUsd = toUsd(blockPayoutAmount, usdPrice);
+      const rewardPerHour = Number.isFinite(rewardPerBlock) ? rewardPerBlock * BLOCKS_PER_HOUR : NaN;
+      const rewardPerDay = Number.isFinite(rewardPerBlock) ? rewardPerBlock * BLOCKS_PER_DAY : NaN;
+      const rewardPerMonth = Number.isFinite(rewardPerBlock) ? rewardPerBlock * BLOCKS_PER_MONTH : NaN;
+      const minimumWithdraw = normalizeFiniteNumber(withdrawalConfig?.minimumWithdraw);
+      const withdrawDays =
+        Number.isFinite(minimumWithdraw) && minimumWithdraw > 0 && Number.isFinite(rewardPerDay) && rewardPerDay > 0
+          ? minimumWithdraw / rewardPerDay
+          : NaN;
 
       return {
         currency,
@@ -282,9 +347,14 @@ export function buildProfitabilityRows(distribution, userDistribution, pricesByM
         blockPayoutUsd,
         rewardRawPerBlock,
         rewardPerBlock,
-        rewardPerHour: Number.isFinite(rewardPerBlock) ? rewardPerBlock * BLOCKS_PER_HOUR : NaN,
-        rewardPerDay: Number.isFinite(rewardPerBlock) ? rewardPerBlock * BLOCKS_PER_DAY : NaN,
-        rewardPerMonth: Number.isFinite(rewardPerBlock) ? rewardPerBlock * BLOCKS_PER_MONTH : NaN,
+        rewardPerHour,
+        rewardPerDay,
+        rewardPerMonth,
+        minimumWithdraw,
+        minimumWithdrawPrecision: Number.isFinite(withdrawalConfig?.precision)
+          ? Math.max(0, Math.min(10, Math.floor(withdrawalConfig.precision)))
+          : 8,
+        withdrawDays,
         usdPrice,
         usdPerBlock,
         usdPerHour: Number.isFinite(usdPerBlock) ? usdPerBlock * BLOCKS_PER_HOUR : NaN,

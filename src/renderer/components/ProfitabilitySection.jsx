@@ -18,6 +18,16 @@ function formatDateTime(value, locale) {
   });
 }
 
+function formatWithdrawDays(value, locale) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return "-";
+  if (numericValue < 1) return locale === "ru" ? "< 1 дн." : "< 1 day";
+
+  const fractionDigits = numericValue < 100 ? 1 : 0;
+  const formatted = formatMarketValue(numericValue, fractionDigits);
+  return locale === "ru" ? `~ ${formatted} дн.` : `~ ${formatted} days`;
+}
+
 function ProfitabilityMetric({ label, value, detail, tone = "neutral" }) {
   return (
     <div className={`profitability-metric profitability-metric-${tone}`}>
@@ -145,6 +155,11 @@ function ProfitabilityCard({ row, rank, historyEntries, i18n }) {
           detail={formatCryptoAmount(row.rewardPerHour, row.symbol, 8)}
         />
         <ProfitabilityMetric
+          label={t("profitability_min_withdraw")}
+          value={formatCryptoAmount(row.minimumWithdraw, row.symbol, row.minimumWithdrawPrecision)}
+          detail={`${t("profitability_days_to_withdraw")}: ${formatWithdrawDays(row.withdrawDays, locale)}`}
+        />
+        <ProfitabilityMetric
           label={t("profitability_month")}
           value={formatUsd(row.usdPerMonth, 2)}
           detail={formatCryptoAmount(row.rewardPerMonth, row.symbol, 6)}
@@ -245,6 +260,7 @@ export function ProfitabilitySection({ profitability, profitabilityHistory, acti
           <span className="market-filter-chip">{t("profitability_priced")}: {formatMarketValue(summary.pricedRows, 0)} / {formatMarketValue(summary.totalRows, 0)}</span>
           <span className="market-filter-chip">{t("profitability_loaded")}: {loadedAt ? formatDateTime(loadedAt, locale) : t("not_loaded_yet")}</span>
           {profitability.priceError ? <span className="market-filter-chip market-filter-chip-warning">{profitability.priceError}</span> : null}
+          {profitability.currenciesConfigError ? <span className="market-filter-chip market-filter-chip-warning">{profitability.currenciesConfigError}</span> : null}
         </div>
       </div>
 

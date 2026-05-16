@@ -2685,6 +2685,8 @@ function buildUserPowerDistributionEndpoint(leagueId) {
   return `https://rollercoin.com/api/league/user-power-distribution-info?league_id=${encodeURIComponent(leagueId)}`;
 }
 
+const ROLLERCOIN_CURRENCIES_CONFIG_ENDPOINT = "https://rollercoin.com/api/wallet/get-currencies-config";
+
 function extractRollercoinObjectPayload(payload, candidatePaths = [], errorMessage = "RollerCoin API returned no object.") {
   const root = payload && typeof payload === "object" ? payload : null;
   if (!root || Array.isArray(root)) {
@@ -2715,6 +2717,28 @@ function extractRollercoinObjectPayload(payload, candidatePaths = [], errorMessa
   }
 
   return root;
+}
+
+function extractRollercoinCurrenciesConfigPayload(payload) {
+  try {
+    return extractRollercoinObjectArrayPayload(
+      payload,
+      ["items", "currencies", "currencyConfig", "currenciesConfig", "config", "configs", "result", "list"],
+      "RollerCoin currencies config API returned no currencies.",
+    );
+  } catch {
+    const root = payload && typeof payload === "object" ? payload : null;
+    const candidates = [];
+
+    if (root?.data && typeof root.data === "object") {
+      candidates.push(...Object.values(root.data));
+    }
+    if (root) {
+      candidates.push(...Object.values(root));
+    }
+
+    return candidates.filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry));
+  }
 }
 
 const LEAGUE_PROFITABILITY_MARKET_IDS = [
@@ -2756,7 +2780,7 @@ async function fetchRollercoinLeagueProfitability(preferredCookieHeader = "", ra
   const leagueEndpoint = buildLeaguePowerDistributionEndpoint(leagueId);
   const userEndpoint = buildUserPowerDistributionEndpoint(leagueId);
 
-  const [leagueResult, userResult, priceResult] = await Promise.all([
+  const [leagueResult, userResult, priceResult, currenciesConfigResult] = await Promise.all([
     fetchRollercoinJsonEndpoint(preferredCookieHeader, leagueEndpoint, {
       bootstrapUrl: "https://rollercoin.com/",
       referrer: "https://rollercoin.com/",
@@ -2782,6 +2806,20 @@ async function fetchRollercoinLeagueProfitability(preferredCookieHeader = "", ra
       prices: {},
       error: error.message,
     })),
+    fetchRollercoinJsonEndpoint(preferredCookieHeader, ROLLERCOIN_CURRENCIES_CONFIG_ENDPOINT, {
+      bootstrapUrl: "https://rollercoin.com/",
+      referrer: "https://rollercoin.com/",
+      sourcePathDirect: "direct-currencies-config-api",
+      sourcePathBrowser: "browser-currencies-config-api",
+      sourcePathDebugger: "debugger-currencies-config-api",
+      stepLabelPrefix: "currencies-config",
+      workerTitle: "RollerCoin Currencies Config Worker",
+      failureMessage: "RollerCoin currencies config API rejected the session.",
+    }).catch((error) => ({
+      success: false,
+      endpoint: ROLLERCOIN_CURRENCIES_CONFIG_ENDPOINT,
+      error: error.message,
+    })),
   ]);
 
   if (!leagueResult?.success) {
@@ -2801,20 +2839,28 @@ async function fetchRollercoinLeagueProfitability(preferredCookieHeader = "", ra
     ["user", "power", "distribution", "result"],
     "User power API returned no current allocation.",
   );
+  const currenciesConfig = currenciesConfigResult?.success
+    ? extractRollercoinCurrenciesConfigPayload(currenciesConfigResult.json)
+    : [];
 
   return {
     success: true,
     leagueId,
     distribution,
     userDistribution,
+    currenciesConfig,
     prices: priceResult.prices || {},
     priceEndpoint: priceResult.endpoint || "",
     priceError: priceResult.error || "",
+    currenciesConfigEndpoint: ROLLERCOIN_CURRENCIES_CONFIG_ENDPOINT,
+    currenciesConfigError: currenciesConfigResult?.success ? "" : currenciesConfigResult?.error || "",
     sourceInfo: {
       leagueEndpoint,
       userEndpoint,
+      currenciesConfigEndpoint: ROLLERCOIN_CURRENCIES_CONFIG_ENDPOINT,
       leagueSourcePath: leagueResult.sourcePath || "",
       userSourcePath: userResult.sourcePath || "",
+      currenciesConfigSourcePath: currenciesConfigResult?.sourcePath || "",
       selectedAuthVariant: userResult.selectedAuthVariant || leagueResult.selectedAuthVariant || null,
       cookieCount: Math.max(Number(leagueResult.cookieCount) || 0, Number(userResult.cookieCount) || 0),
       loadedAt: Date.now(),

@@ -96,9 +96,11 @@ function createDefaultProfitabilityState() {
     summary: buildProfitabilitySummary([], null),
     userDistribution: null,
     distribution: [],
+    currenciesConfig: [],
     prices: {},
     sourceInfo: null,
     priceError: "",
+    currenciesConfigError: "",
   };
 }
 
@@ -791,6 +793,7 @@ export function useAppController() {
       loading: true,
       status: loadingStatus,
       priceError: "",
+      currenciesConfigError: "",
     }));
 
     try {
@@ -799,7 +802,12 @@ export function useAppController() {
         throw new Error(result?.error || "Failed to load league profitability.");
       }
 
-      const rows = buildProfitabilityRows(result.distribution, result.userDistribution, result.prices);
+      const rows = buildProfitabilityRows(
+        result.distribution,
+        result.userDistribution,
+        result.prices,
+        result.currenciesConfig,
+      );
       const summary = buildProfitabilitySummary(rows, result.userDistribution);
       const bestText = summary.best
         ? ` Best daily estimate: ${summary.best.symbol} at $${Number(summary.best.usdPerDay).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}.`
@@ -816,9 +824,11 @@ export function useAppController() {
         summary,
         userDistribution: result.userDistribution || null,
         distribution: Array.isArray(result.distribution) ? result.distribution : [],
+        currenciesConfig: Array.isArray(result.currenciesConfig) ? result.currenciesConfig : [],
         prices: result.prices || {},
         sourceInfo: result.sourceInfo || null,
         priceError: result.priceError || "",
+        currenciesConfigError: result.currenciesConfigError || "",
       }));
       setProfitabilityHistory((prev) => recordProfitabilityHistory(prev, rows, summary, {
         leagueId: result.leagueId || leagueId,
@@ -842,6 +852,7 @@ export function useAppController() {
       loading: true,
       status: "Checking RollerCoin session for profitability...",
       priceError: "",
+      currenciesConfigError: "",
     }));
 
     try {
