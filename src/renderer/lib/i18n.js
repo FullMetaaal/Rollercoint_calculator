@@ -67,7 +67,7 @@ const UI_TEXT = {
     auth_checking: "Checking...",
     auth_login_button: "Login required",
     auth_check_button: "Check auth",
-    auth_updates_button: "Check for app updates",
+    auth_updates_button: "Check/download update",
     current_baseline_eyebrow: "Baseline Setup",
     current_system_title: "Current System",
     current_system_subtitle:
@@ -407,7 +407,7 @@ const UI_TEXT = {
     auth_checking: "Проверка...",
     auth_login_button: "Требуется вход",
     auth_check_button: "Проверить вход",
-    auth_updates_button: "Проверить обновления",
+    auth_updates_button: "Проверить/загрузить обновление",
     current_baseline_eyebrow: "Настройка базы",
     current_system_title: "Текущая система",
     current_system_subtitle:
@@ -917,6 +917,7 @@ export function translateRuntimeText(text, locale = "en") {
     [/^App update check failed: (.+)$/, "Ошибка проверки обновлений приложения: $1"],
     [/^Update ([A-Za-z0-9._-]+) is available on GitHub\. Current version: ([A-Za-z0-9._-]+)\.$/, "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 $1 \u043d\u0430 GitHub. \u0422\u0435\u043a\u0443\u0449\u0430\u044f \u0432\u0435\u0440\u0441\u0438\u044f: $2."],
     [/^Update ([A-Za-z0-9._-]+|new) found\. Download is not started automatically\.$/, "\u041d\u0430\u0439\u0434\u0435\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 $1. \u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u043d\u0435 \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u0435\u0442\u0441\u044f \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438."],
+    [/^Update ([A-Za-z0-9._-]+|new) downloaded\. Close and restart the app when you are ready to install it\.$/, "\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 $1 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043e. \u0417\u0430\u043a\u0440\u043e\u0439\u0442\u0435 \u0438 \u043f\u0435\u0440\u0435\u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435, \u043a\u043e\u0433\u0434\u0430 \u0431\u0443\u0434\u0435\u0442\u0435 \u0433\u043e\u0442\u043e\u0432\u044b \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u0435\u0433\u043e."],
     [/^You're already using the latest version \(([A-Za-z0-9._-]+)\)\.$/, "\u0423 \u0432\u0430\u0441 \u0443\u0436\u0435 \u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430\u044f \u0432\u0435\u0440\u0441\u0438\u044f ($1)."],
     [/^You're using a newer local build \(([A-Za-z0-9._-]+)\) than the latest published release \(([A-Za-z0-9._-]+)\)\.$/, "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u0430\u044f \u0441\u0431\u043e\u0440\u043a\u0430 ($1) \u043d\u043e\u0432\u0435\u0435, \u0447\u0435\u043c \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 \u043e\u043f\u0443\u0431\u043b\u0438\u043a\u043e\u0432\u0430\u043d\u043d\u044b\u0439 \u0440\u0435\u043b\u0438\u0437 ($2)."],
     [/^Update check is already in progress\.$/, "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0439 \u0443\u0436\u0435 \u0438\u0434\u0435\u0442."],

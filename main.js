@@ -842,6 +842,7 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
     const cleanup = () => {
       updater.removeListener("update-available", onUpdateAvailable);
       updater.removeListener("update-not-available", onUpdateNotAvailable);
+      updater.removeListener("update-downloaded", onUpdateDownloaded);
       updater.removeListener("error", onError);
     };
 
@@ -853,11 +854,30 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
     };
 
     const onUpdateAvailable = (info) => {
+      if (manual) {
+        logAutoUpdate("Manual update download started.", {
+          version: info?.version || null,
+        });
+        Promise.resolve()
+          .then(() => updater.downloadUpdate())
+          .catch(onError);
+        return;
+      }
+
       finish({
         started: true,
         status: "update-available",
         version: info?.version || null,
         message: `Update ${info?.version || "new"} found. Download is not started automatically.`,
+      });
+    };
+
+    const onUpdateDownloaded = (info) => {
+      finish({
+        started: true,
+        status: "update-downloaded",
+        version: info?.version || null,
+        message: `Update ${info?.version || "new"} downloaded. Close and restart the app when you are ready to install it.`,
       });
     };
 
@@ -885,6 +905,7 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
 
     updater.once("update-available", onUpdateAvailable);
     updater.once("update-not-available", onUpdateNotAvailable);
+    updater.once("update-downloaded", onUpdateDownloaded);
     updater.once("error", onError);
 
     Promise.resolve()

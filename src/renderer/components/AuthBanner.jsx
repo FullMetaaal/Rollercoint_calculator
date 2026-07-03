@@ -9,7 +9,9 @@ export function AuthBanner({ market, onAuthAction, onCheckUpdates, i18n }) {
   const updateTone =
     market.appUpdateStatus === "error"
       ? "error"
-      : market.appUpdateStatus === "update-available" || market.appUpdateStatus === "up-to-date"
+      : market.appUpdateStatus === "update-available" ||
+        market.appUpdateStatus === "update-downloaded" ||
+        market.appUpdateStatus === "up-to-date"
         ? "success"
         : "neutral";
 
