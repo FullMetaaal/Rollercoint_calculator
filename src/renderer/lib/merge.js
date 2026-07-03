@@ -140,12 +140,25 @@ function normalizePowerPhs(value) {
   return parsed;
 }
 
+function normalizeInventoryPowerPhs(value) {
+  const parsed = firstFinite([value]);
+  if (!Number.isFinite(parsed) || parsed <= 0) return NaN;
+  if (!Number.isInteger(parsed) && parsed < 1) return parsed;
+  return parsed / 1000000;
+}
+
 function normalizeBonusPercent(value) {
   const parsed = firstFinite([value]);
   if (!Number.isFinite(parsed) || parsed < 0) return 0;
   if (parsed >= 1000000) return parsed / 10000;
   if (Number.isInteger(parsed) && parsed >= 100) return parsed / 100;
   return parsed;
+}
+
+function normalizeInventoryBonusPercent(value) {
+  const parsed = firstFinite([value]);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed / 100;
 }
 
 function normalizeUrl(value) {
@@ -510,7 +523,7 @@ function extractEntityCount(entity, fallback = 1) {
   return Math.max(1, Math.floor(parsed));
 }
 
-function normalizeMinerEntity(entity, fallbackName = "Miner") {
+function normalizeMinerEntity(entity, fallbackName = "Miner", options = {}) {
   if (!entity || typeof entity !== "object") return null;
 
   const subject =
@@ -532,7 +545,7 @@ function normalizeMinerEntity(entity, fallbackName = "Miner") {
     fallbackName;
   if (!name) return null;
 
-  const power = normalizePowerPhs(firstFinite([
+  const rawPower = firstFinite([
     subject?.power,
     subject?.hashrate,
     subject?.hash_rate,
@@ -542,9 +555,12 @@ function normalizeMinerEntity(entity, fallbackName = "Miner") {
     getByPath(subject, "product.power"),
     getByPath(subject, "miner.power"),
     getByPath(subject, "market_hashrate"),
-  ]));
+  ]);
+  const power = options.inventoryScale === true
+    ? normalizeInventoryPowerPhs(rawPower)
+    : normalizePowerPhs(rawPower);
 
-  const bonusPercent = normalizeBonusPercent(firstFinite([
+  const rawBonusPercent = firstFinite([
     subject?.bonusPercent,
     subject?.bonus_percent,
     subject?.miner_bonus,
@@ -559,7 +575,10 @@ function normalizeMinerEntity(entity, fallbackName = "Miner") {
     getByPath(subject, "item.bonus_percent"),
     getByPath(subject, "product.bonus_percent"),
     getByPath(subject, "miner.bonus_percent"),
-  ]));
+  ]);
+  const bonusPercent = options.inventoryScale === true
+    ? normalizeInventoryBonusPercent(rawBonusPercent)
+    : normalizeBonusPercent(rawBonusPercent);
 
   const level = extractLevel(subject);
   const width = extractWidth(subject);
@@ -693,10 +712,10 @@ function buildPartLookupKeys(entity) {
   return [...keys];
 }
 
-function aggregateMiners(miners) {
+function aggregateMiners(miners, options = {}) {
   const byKey = new Map();
   (Array.isArray(miners) ? miners : []).forEach((miner) => {
-    const normalized = normalizeMinerEntity(miner, "Miner");
+    const normalized = normalizeMinerEntity(miner, "Miner", options);
     if (!normalized) return;
     const key = buildMinerKey(normalized);
     if (!key) return;
@@ -710,7 +729,7 @@ function aggregateMiners(miners) {
 }
 
 export function normalizeInventoryMiners(miners) {
-  return aggregateMiners(miners);
+  return aggregateMiners(miners, { inventoryScale: true });
 }
 
 function aggregateParts(parts) {
@@ -1092,7 +1111,7 @@ export function buildMergePlannerAnalysis({
   }
 
   const ownedRoomMiners = aggregateMiners((Array.isArray(roomMiners) ? roomMiners : []).map((miner) => ({ ...miner, count: 1 })));
-  const inventoryMiners = aggregateMiners(rawInventoryMiners);
+  const inventoryMiners = normalizeInventoryMiners(rawInventoryMiners);
   const ownedMiners = aggregateMiners([...ownedRoomMiners, ...inventoryMiners]);
   const ownedParts = aggregateParts(rawInventoryParts);
 
