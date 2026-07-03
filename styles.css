@@ -2065,6 +2065,11 @@ tbody tr:hover {
   font-weight: 700;
 }
 
+.warning {
+  color: #956611;
+  font-weight: 700;
+}
+
 .negative {
   color: var(--danger);
   font-weight: 700;

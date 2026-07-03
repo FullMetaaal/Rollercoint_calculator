@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AuthBanner } from "./components/AuthBanner";
 import { ComparisonSection } from "./components/ComparisonSection";
 import { CurrentSystemSection } from "./components/CurrentSystemSection";
+import { DuplicateMinersSection } from "./components/DuplicateMinersSection";
 import { MarketSection } from "./components/MarketSection";
 import { MergePlannerSection } from "./components/MergePlannerSection";
 import { ProfitabilitySection } from "./components/ProfitabilitySection";
@@ -24,6 +25,7 @@ export default function App() {
     market,
     comparison,
     comparisonAnalysis,
+    duplicateAnalysis,
     mergePlanner,
     mergeAnalysis,
     profitability,
@@ -48,6 +50,8 @@ export default function App() {
       ? "comparison"
       : market.primaryTab === "profitability"
         ? "profitability"
+      : market.primaryTab === "duplicates"
+        ? "duplicates"
       : market.primaryTab === "merge"
         ? "merge"
         : "market";
@@ -81,6 +85,16 @@ export default function App() {
                 }}
               >
                 {t("nav_market_scanner")}
+              </button>
+              <button
+                type="button"
+                className={`workspace-nav-link ${workspaceNavKey === "duplicates" ? "is-active" : ""}`}
+                onClick={() => {
+                  actions.setPrimaryTab("duplicates");
+                  scrollToId("duplicatesTabPanel");
+                }}
+              >
+                {t("nav_duplicates")}
               </button>
               <button
                 type="button"
@@ -173,6 +187,14 @@ export default function App() {
                 {t("nav_market_scanner")}
               </button>
               <button
+                id="duplicatesTabBtn"
+                type="button"
+                className={`tab-button ${market.primaryTab === "duplicates" ? "is-active" : ""}`}
+                onClick={() => actions.setPrimaryTab("duplicates")}
+              >
+                {t("nav_duplicates")}
+              </button>
+              <button
                 id="mergeTabBtn"
                 type="button"
                 className={`tab-button ${market.primaryTab === "merge" ? "is-active" : ""}`}
@@ -203,6 +225,16 @@ export default function App() {
             <MarketSection
               market={market}
               recommendations={recommendations}
+              displayUnit={currentSystem.displayUnit}
+              actions={actions}
+              i18n={i18n}
+            />
+          </section>
+
+          <section id="duplicatesTabPanel" className={`tab-panel ${market.primaryTab === "duplicates" ? "is-active" : ""}`} hidden={market.primaryTab !== "duplicates"}>
+            <DuplicateMinersSection
+              duplicateAnalysis={duplicateAnalysis}
+              market={market}
               displayUnit={currentSystem.displayUnit}
               actions={actions}
               i18n={i18n}

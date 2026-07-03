@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { calculateComparisonAnalysis, createEmptyCandidateRow } from "../lib/comparison";
+import { buildDuplicateMinerAnalysis } from "../lib/duplicates";
 import {
   buildMergePlannerDiagnostics,
   buildMergePlannerAnalysis,
@@ -178,6 +179,7 @@ export function useAppController() {
   }, []);
 
   const comparisonAnalysis = calculateComparisonAnalysis(currentSystem, comparison);
+  const duplicateAnalysis = buildDuplicateMinerAnalysis(market.roomMiners);
   const roomMinersSorted = sortRoomMinersCollection(
     market.roomMiners,
     market.settings.roomMinersSortMode,
@@ -1216,6 +1218,7 @@ export function useAppController() {
     market,
     comparison,
     comparisonAnalysis,
+    duplicateAnalysis,
     mergePlanner,
     mergeAnalysis,
     profitability,
