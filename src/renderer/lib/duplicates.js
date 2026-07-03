@@ -36,6 +36,10 @@ function getDuplicateIdentity(miner) {
   };
 }
 
+export function getExactMinerDuplicateKey(miner) {
+  return getDuplicateIdentity(miner)?.key || "";
+}
+
 export function buildDuplicateMinerAnalysis(roomMiners) {
   const groupsByKey = new Map();
   let incompleteCount = 0;

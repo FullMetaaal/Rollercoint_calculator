@@ -7,6 +7,7 @@ import {
   parseNumber,
   toThs,
 } from "./power";
+import { getExactMinerDuplicateKey } from "./duplicates";
 import { getFs, getIpcRenderer, getOs, getPath } from "./runtime";
 
 export const MARKET_DIRECT_MAX_PAGES = 250;
@@ -1385,6 +1386,109 @@ function sortRecommendationItems(items, sortMode = "gainPerPrice") {
   return [...items].sort((leftItem, rightItem) => compareRecommendationItems(leftItem, rightItem, sortMode));
 }
 
+function getMinerBonusPercentValue(miner) {
+  return Number.isFinite(Number(miner?.bonusPercent)) ? Number(miner.bonusPercent) : 0;
+}
+
+function getBonusStackKey(miner, index = 0, scope = "miner") {
+  const exactKey = getExactMinerDuplicateKey(miner);
+  if (exactKey) return `exact:${exactKey}`;
+
+  const id = String(miner?.id || "").trim();
+  return `unique:${scope}:${id || index}`;
+}
+
+function cloneBonusStackEntries(entries) {
+  const cloned = new Map();
+  if (!(entries instanceof Map)) return cloned;
+
+  entries.forEach((entry, key) => {
+    cloned.set(key, { ...entry });
+  });
+  return cloned;
+}
+
+function addBonusStackEntries(entries, miners, scope) {
+  (Array.isArray(miners) ? miners : []).forEach((miner, index) => {
+    const key = getBonusStackKey(miner, index, scope);
+    const bonusPercent = getMinerBonusPercentValue(miner);
+    const existing = entries.get(key);
+    entries.set(key, {
+      count: (existing?.count || 0) + 1,
+      bonusPercent: Math.max(Number(existing?.bonusPercent) || 0, bonusPercent),
+    });
+  });
+}
+
+function removeBonusStackEntries(entries, miners, scope) {
+  (Array.isArray(miners) ? miners : []).forEach((miner, index) => {
+    const key = getBonusStackKey(miner, index, scope);
+    const existing = entries.get(key);
+    if (!existing) return;
+
+    const nextCount = Math.max(0, (Number(existing.count) || 0) - 1);
+    if (nextCount === 0) {
+      entries.delete(key);
+      return;
+    }
+
+    entries.set(key, { ...existing, count: nextCount });
+  });
+}
+
+function getBonusStackTotal(entries) {
+  if (!(entries instanceof Map)) return 0;
+  let total = 0;
+  entries.forEach((entry) => {
+    if ((Number(entry?.count) || 0) > 0) {
+      total += Number(entry?.bonusPercent) || 0;
+    }
+  });
+  return total;
+}
+
+function buildRoomBonusState(roomMiners) {
+  const entries = new Map();
+  addBonusStackEntries(entries, roomMiners, "room");
+  return {
+    entries,
+    totalBonusPercent: getBonusStackTotal(entries),
+  };
+}
+
+function calculateEffectiveBonusChange(roomBonusState, purchaseMiners, replacementMiners) {
+  if (!roomBonusState || !(roomBonusState.entries instanceof Map)) {
+    const boughtBonusPercent = (Array.isArray(purchaseMiners) ? purchaseMiners : [])
+      .reduce((sum, miner) => sum + getMinerBonusPercentValue(miner), 0);
+    const removedBonusPercent = (Array.isArray(replacementMiners) ? replacementMiners : [])
+      .reduce((sum, miner) => sum + getMinerBonusPercentValue(miner), 0);
+    return {
+      boughtBonusPercent,
+      removedBonusPercent,
+      bonusPercentDelta: boughtBonusPercent - removedBonusPercent,
+    };
+  }
+
+  const beforeTotal = getBonusStackTotal(roomBonusState.entries);
+  const afterRemovalEntries = cloneBonusStackEntries(roomBonusState.entries);
+  removeBonusStackEntries(afterRemovalEntries, replacementMiners, "room");
+  const afterRemovalTotal = getBonusStackTotal(afterRemovalEntries);
+
+  const afterPurchaseEntries = cloneBonusStackEntries(afterRemovalEntries);
+  addBonusStackEntries(afterPurchaseEntries, purchaseMiners, "purchase");
+  const afterPurchaseTotal = getBonusStackTotal(afterPurchaseEntries);
+
+  return {
+    boughtBonusPercent: afterPurchaseTotal - afterRemovalTotal,
+    removedBonusPercent: beforeTotal - afterRemovalTotal,
+    bonusPercentDelta: afterPurchaseTotal - beforeTotal,
+  };
+}
+
+function calculateEffectiveRemovedBonusPercent(roomBonusState, replacementMiners) {
+  return calculateEffectiveBonusChange(roomBonusState, [], replacementMiners).removedBonusPercent;
+}
+
 function calculateGainBreakdown(currentSystem, projectedBaseThs, projectedBonusPercent) {
   const currentBaseThs = Number(currentSystem?.baseThs) || 0;
   const currentBonusPercent = Number(currentSystem?.bonusPercent) || 0;
@@ -1414,6 +1518,7 @@ function buildRecommendationEntry({
   removedBonusPercent = 0,
   removedMask = 0n,
   buyMask = 0n,
+  roomBonusState = null,
   entryType = "single",
   replaceTextOverride = null,
   sourceMinerId = "",
@@ -1430,18 +1535,27 @@ function buildRecommendationEntry({
   const safeBoughtPowerThs = Number.isFinite(Number(boughtPowerThs))
     ? Number(boughtPowerThs)
     : normalizedPurchaseMiners.reduce((sum, miner) => sum + toThs(miner.power, "Ph/s"), 0);
-  const safeBoughtBonusPercent = Number.isFinite(Number(boughtBonusPercent))
+  const nominalBoughtBonusPercent = Number.isFinite(Number(boughtBonusPercent))
     ? Number(boughtBonusPercent)
     : normalizedPurchaseMiners.reduce((sum, miner) => sum + (Number(miner.bonusPercent) || 0), 0);
   const safeRemovedPowerThs = Number.isFinite(Number(removedPowerThs))
     ? Number(removedPowerThs)
     : normalizedReplacementMiners.reduce((sum, miner) => sum + toThs(miner.power, "Ph/s"), 0);
-  const safeRemovedBonusPercent = Number.isFinite(Number(removedBonusPercent))
+  const nominalRemovedBonusPercent = Number.isFinite(Number(removedBonusPercent))
     ? Number(removedBonusPercent)
     : normalizedReplacementMiners.reduce((sum, miner) => sum + (Number(miner.bonusPercent) || 0), 0);
+  const effectiveBonusChange = calculateEffectiveBonusChange(
+    roomBonusState,
+    normalizedPurchaseMiners,
+    normalizedReplacementMiners,
+  );
+  const safeBoughtBonusPercent = roomBonusState ? effectiveBonusChange.boughtBonusPercent : nominalBoughtBonusPercent;
+  const safeRemovedBonusPercent = roomBonusState ? effectiveBonusChange.removedBonusPercent : nominalRemovedBonusPercent;
 
   const basePowerDeltaThs = safeBoughtPowerThs - safeRemovedPowerThs;
-  const bonusPercentDelta = safeBoughtBonusPercent - safeRemovedBonusPercent;
+  const bonusPercentDelta = roomBonusState
+    ? effectiveBonusChange.bonusPercentDelta
+    : safeBoughtBonusPercent - safeRemovedBonusPercent;
   const projectedBaseThs = currentSystem.baseThs + safeBoughtPowerThs - safeRemovedPowerThs;
   const projectedBonusPercent = currentSystem.bonusPercent + safeBoughtBonusPercent - safeRemovedBonusPercent;
   const projectedTotalThs = getCurrentTotal(projectedBaseThs, projectedBonusPercent);
@@ -1537,7 +1651,7 @@ function buildFilteredMarketMiners({
   });
 }
 
-function buildRoomReplacementSets(roomMiners, strategy = "strict") {
+function buildRoomReplacementSets(roomMiners, strategy = "strict", roomBonusState = null) {
   const roomMinerMaskById = new Map(
     roomMiners.map((miner, index) => [String(miner?.id || `room-miner-${index + 1}`), 1n << BigInt(index)]),
   );
@@ -1553,7 +1667,7 @@ function buildRoomReplacementSets(roomMiners, strategy = "strict") {
       width: Math.floor(Number(miner.width)),
       miners: [miner],
       removedPowerThs: toThs(miner.power, "Ph/s"),
-      removedBonusPercent: miner.bonusPercent,
+      removedBonusPercent: calculateEffectiveRemovedBonusPercent(roomBonusState, [miner]),
       removedMask: buildRemovedMask([miner]),
       label: buildReplacementSetLabel([miner]),
     }));
@@ -1571,7 +1685,7 @@ function buildRoomReplacementSets(roomMiners, strategy = "strict") {
         width: 2,
         miners,
         removedPowerThs: toThs(miners[0].power, "Ph/s") + toThs(miners[1].power, "Ph/s"),
-        removedBonusPercent: miners[0].bonusPercent + miners[1].bonusPercent,
+        removedBonusPercent: calculateEffectiveRemovedBonusPercent(roomBonusState, miners),
         removedMask: buildRemovedMask(miners),
         label: buildReplacementSetLabel(miners),
       });
@@ -1587,6 +1701,7 @@ function buildSingleRecommendationItems({
   totalCurrentThs,
   replacementEnabled,
   roomReplacementSets,
+  roomBonusState,
   sortMode,
 }) {
   const replacementSetsByWidth = new Map();
@@ -1610,6 +1725,7 @@ function buildSingleRecommendationItems({
         currency: miner.currency || "RLT",
         boughtPowerThs: toThs(miner.power, "Ph/s"),
         boughtBonusPercent: miner.bonusPercent,
+        roomBonusState,
         sourceMinerId: miner.id,
         offerKey,
       };
@@ -1724,7 +1840,7 @@ function compareReplacementSetsByLoss(leftSet, rightSet, currentSystem) {
   return leftSet.miners.length - rightSet.miners.length;
 }
 
-function buildBudgetReplacementSetMap(roomMiners, currentSystem, maxWidth) {
+function buildBudgetReplacementSetMap(roomMiners, currentSystem, maxWidth, roomBonusState = null) {
   const normalizedMaxWidth = Math.max(0, Math.floor(Number(maxWidth) || 0));
   const replacementBuckets = new Map();
   replacementBuckets.set(0, [{
@@ -1748,7 +1864,7 @@ function buildBudgetReplacementSetMap(roomMiners, currentSystem, maxWidth) {
         width,
         miner,
         removedPowerThs: toThs(miner.power, "Ph/s"),
-        removedBonusPercent: Number(miner.bonusPercent) || 0,
+        removedBonusPercent: calculateEffectiveRemovedBonusPercent(roomBonusState, [miner]),
         removedMask: roomMinerMaskById.get(String(miner?.id || `room-miner-${index + 1}`)) || 0n,
       };
     })
@@ -1764,13 +1880,14 @@ function buildBudgetReplacementSetMap(roomMiners, currentSystem, maxWidth) {
       sourceBucket.forEach((state) => {
         if ((state.removedMask & roomEntry.removedMask) !== 0n) return;
 
+        const nextMiners = [...state.miners, roomEntry.miner];
         nextBucket.push({
           width: nextWidth,
-          miners: [...state.miners, roomEntry.miner],
+          miners: nextMiners,
           removedPowerThs: state.removedPowerThs + roomEntry.removedPowerThs,
-          removedBonusPercent: state.removedBonusPercent + roomEntry.removedBonusPercent,
+          removedBonusPercent: calculateEffectiveRemovedBonusPercent(roomBonusState, nextMiners),
           removedMask: state.removedMask | roomEntry.removedMask,
-          label: buildReplacementSetLabel([...state.miners, roomEntry.miner]),
+          label: buildReplacementSetLabel(nextMiners),
         });
       });
 
@@ -1809,6 +1926,7 @@ function buildBudgetModeSingleItems({
   totalCurrentThs,
   replacementEnabled,
   replacementSetsByWidth,
+  roomBonusState,
   sortMode,
 }) {
   const items = filteredMarketMiners
@@ -1832,6 +1950,7 @@ function buildBudgetModeSingleItems({
           removedPowerThs: replacementSet.removedPowerThs,
           removedBonusPercent: replacementSet.removedBonusPercent,
           removedMask: replacementSet.removedMask,
+          roomBonusState,
           sourceMinerId: purchaseMiner.id,
           offerKey: getMarketMinerOfferKey(purchaseMiner),
         });
@@ -1845,6 +1964,7 @@ function buildBudgetModeSingleItems({
         currency: purchaseMiner.currency || "RLT",
         boughtPowerThs: toThs(purchaseMiner.power, "Ph/s"),
         boughtBonusPercent: purchaseMiner.bonusPercent,
+        roomBonusState,
         sourceMinerId: purchaseMiner.id,
         offerKey: getMarketMinerOfferKey(purchaseMiner),
       });
@@ -1943,6 +2063,7 @@ function buildBudgetCombinationItems({
   totalCurrentThs,
   replacementEnabled,
   replacementSetsByWidth,
+  roomBonusState,
   sortMode,
 }) {
   if (budget !== null && (!Number.isFinite(budget) || budget <= 0)) {
@@ -2002,6 +2123,7 @@ function buildBudgetCombinationItems({
           removedBonusPercent: replacementSet?.removedBonusPercent || 0,
           removedMask: replacementSet?.removedMask || 0n,
           buyMask: state.buyMask | option.buyMask,
+          roomBonusState,
           entryType: "bundle",
           sourceMinerId: "bundle",
           bundleKey: atomicKeys.join("|"),
@@ -2150,13 +2272,17 @@ export function buildMarketRecommendations({
   });
 
   const totalCurrentThs = getCurrentTotal(currentSystem.baseThs, currentSystem.bonusPercent);
-  const roomReplacementSets = replacementEnabled ? buildRoomReplacementSets(roomMiners, replacementStrategy) : [];
+  const roomBonusState = buildRoomBonusState(roomMiners);
+  const roomReplacementSets = replacementEnabled
+    ? buildRoomReplacementSets(roomMiners, replacementStrategy, roomBonusState)
+    : [];
   const singleItems = buildSingleRecommendationItems({
     filteredMarketMiners,
     currentSystem,
     totalCurrentThs,
     replacementEnabled,
     roomReplacementSets,
+    roomBonusState,
     sortMode: marketSettings.sortMode,
   });
 
@@ -2182,7 +2308,12 @@ export function buildMarketRecommendations({
         (Number.isFinite(Number(miner?.width)) ? Math.floor(Number(miner.width)) : 0)),
     );
     const replacementSetsByWidth = replacementEnabled
-      ? buildBudgetReplacementSetMap(roomMiners, currentSystem, Math.max(maxMarketWidth * maxBudgetDepth, maxMarketWidth))
+      ? buildBudgetReplacementSetMap(
+        roomMiners,
+        currentSystem,
+        Math.max(maxMarketWidth * maxBudgetDepth, maxMarketWidth),
+        roomBonusState,
+      )
       : new Map();
     const budgetSingleItems = buildBudgetModeSingleItems({
       filteredMarketMiners,
@@ -2190,6 +2321,7 @@ export function buildMarketRecommendations({
       totalCurrentThs,
       replacementEnabled,
       replacementSetsByWidth,
+      roomBonusState,
       sortMode: marketSettings.sortMode,
     });
     bundleItems = buildBudgetCombinationItems({
@@ -2199,6 +2331,7 @@ export function buildMarketRecommendations({
       totalCurrentThs,
       replacementEnabled,
       replacementSetsByWidth,
+      roomBonusState,
       sortMode: marketSettings.sortMode,
     });
     allItems = sortRecommendationItems([...budgetSingleItems, ...bundleItems], marketSettings.sortMode);
