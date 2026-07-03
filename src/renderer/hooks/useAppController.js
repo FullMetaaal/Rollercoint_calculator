@@ -822,14 +822,11 @@ export function useAppController() {
           ? authResult.cookieHeader.trim()
           : marketRef.current.cookieHeader;
 
-      let roomResult = { success: true, roomMiners: marketRef.current.roomMiners, reused: true };
-      if (!Array.isArray(marketRef.current.roomMiners) || marketRef.current.roomMiners.length === 0) {
-        setInventoryReplacement((prev) => ({
-          ...prev,
-          status: "Loading room miners before inventory replacement scan...",
-        }));
-        roomResult = await loadRoomMiners({ cookieHeader: activeCookieHeader });
-      }
+      setInventoryReplacement((prev) => ({
+        ...prev,
+        status: "Refreshing room miners before inventory replacement scan...",
+      }));
+      const roomResult = await loadRoomMiners({ cookieHeader: activeCookieHeader });
       if (!roomResult?.success) {
         throw new Error(roomResult?.error || "Room miners are required before inventory replacement scan.");
       }

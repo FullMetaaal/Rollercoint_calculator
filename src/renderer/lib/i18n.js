@@ -942,6 +942,7 @@ export function translateRuntimeText(text, locale = "en") {
     [/^Inventory replacements are not loaded\.$/, "Замены из инвентаря еще не загружены."],
     [/^Checking RollerCoin session for inventory replacements\.\.\.$/, "Проверка сессии RollerCoin для замен из инвентаря..."],
     [/^Loading room miners before inventory replacement scan\.\.\.$/, "Загрузка майнеров комнаты перед проверкой замен из инвентаря..."],
+    [/^Refreshing room miners before inventory replacement scan\.\.\.$/, "Обновление майнеров комнаты перед проверкой замен из инвентаря..."],
     [/^Loading inventory miners\.\.\.$/, "Загрузка майнеров инвентаря..."],
     [/^Loaded (\d+) inventory miner entries\. Replacement suggestions updated\.$/, "Загружено записей майнеров инвентаря: $1. Рекомендации по заменам обновлены."],
     [/^Inventory replacement scan failed: (.+)$/, "Ошибка проверки замен из инвентаря: $1"],
