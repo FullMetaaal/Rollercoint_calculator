@@ -1294,6 +1294,11 @@ tbody tr:hover {
   gap: 8px;
 }
 
+.inventory-replacement-list {
+  display: grid;
+  gap: 8px;
+}
+
 .merge-requirement-item {
   padding: 10px 12px;
   border-radius: 14px;

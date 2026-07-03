@@ -4,6 +4,7 @@ import { AuthBanner } from "./components/AuthBanner";
 import { ComparisonSection } from "./components/ComparisonSection";
 import { CurrentSystemSection } from "./components/CurrentSystemSection";
 import { DuplicateMinersSection } from "./components/DuplicateMinersSection";
+import { InventoryReplacementSection } from "./components/InventoryReplacementSection";
 import { MarketSection } from "./components/MarketSection";
 import { MergePlannerSection } from "./components/MergePlannerSection";
 import { ProfitabilitySection } from "./components/ProfitabilitySection";
@@ -28,6 +29,8 @@ export default function App() {
     duplicateAnalysis,
     mergePlanner,
     mergeAnalysis,
+    inventoryReplacement,
+    inventoryReplacementAnalysis,
     profitability,
     profitabilityHistory,
     recommendations,
@@ -52,6 +55,8 @@ export default function App() {
         ? "profitability"
       : market.primaryTab === "duplicates"
         ? "duplicates"
+      : market.primaryTab === "inventory"
+        ? "inventory"
       : market.primaryTab === "merge"
         ? "merge"
         : "market";
@@ -95,6 +100,16 @@ export default function App() {
                 }}
               >
                 {t("nav_duplicates")}
+              </button>
+              <button
+                type="button"
+                className={`workspace-nav-link ${workspaceNavKey === "inventory" ? "is-active" : ""}`}
+                onClick={() => {
+                  actions.setPrimaryTab("inventory");
+                  scrollToId("inventoryTabPanel");
+                }}
+              >
+                {t("nav_inventory_replacements")}
               </button>
               <button
                 type="button"
@@ -195,6 +210,14 @@ export default function App() {
                 {t("nav_duplicates")}
               </button>
               <button
+                id="inventoryTabBtn"
+                type="button"
+                className={`tab-button ${market.primaryTab === "inventory" ? "is-active" : ""}`}
+                onClick={() => actions.setPrimaryTab("inventory")}
+              >
+                {t("nav_inventory_replacements")}
+              </button>
+              <button
                 id="mergeTabBtn"
                 type="button"
                 className={`tab-button ${market.primaryTab === "merge" ? "is-active" : ""}`}
@@ -235,6 +258,16 @@ export default function App() {
             <DuplicateMinersSection
               duplicateAnalysis={duplicateAnalysis}
               market={market}
+              displayUnit={currentSystem.displayUnit}
+              actions={actions}
+              i18n={i18n}
+            />
+          </section>
+
+          <section id="inventoryTabPanel" className={`tab-panel ${market.primaryTab === "inventory" ? "is-active" : ""}`} hidden={market.primaryTab !== "inventory"}>
+            <InventoryReplacementSection
+              inventory={inventoryReplacement}
+              inventoryAnalysis={inventoryReplacementAnalysis}
               displayUnit={currentSystem.displayUnit}
               actions={actions}
               i18n={i18n}

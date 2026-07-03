@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { calculateComparisonAnalysis, createEmptyCandidateRow } from "../lib/comparison";
 import { buildDuplicateMinerAnalysis } from "../lib/duplicates";
+import { buildInventoryReplacementAnalysis } from "../lib/inventory";
 import {
   buildMergePlannerDiagnostics,
   buildMergePlannerAnalysis,
@@ -105,6 +106,16 @@ function createDefaultProfitabilityState() {
   };
 }
 
+function createDefaultInventoryReplacementState() {
+  return {
+    loading: false,
+    status: "Inventory replacements are not loaded.",
+    rawInventoryMiners: [],
+    sourceInfo: null,
+    lastLoadedAt: null,
+  };
+}
+
 export function useAppController() {
   const [currentSystem, setCurrentSystem] = useState(() => restoreCurrentSystemState());
   const [currentSystemHistory, setCurrentSystemHistory] = useState(() => restoreCurrentSystemHistory());
@@ -123,6 +134,7 @@ export function useAppController() {
   const [comparison, setComparison] = useState(DEFAULT_COMPARISON);
   const [marketRecommendations, setMarketRecommendations] = useState(() => createEmptyMarketRecommendationsState());
   const [mergePlanner, setMergePlanner] = useState(() => createDefaultMergePlannerState());
+  const [inventoryReplacement, setInventoryReplacement] = useState(() => createDefaultInventoryReplacementState());
   const [profitability, setProfitability] = useState(() => createDefaultProfitabilityState());
   const [profitabilityHistory, setProfitabilityHistory] = useState(() => restoreProfitabilityHistory());
   const marketHeartbeatRef = useRef(null);
@@ -198,6 +210,11 @@ export function useAppController() {
     marketMiners: market.marketMiners,
     currentSystemState: currentSystem,
     budgetInput: mergePlanner.budgetInput,
+  });
+  const inventoryReplacementAnalysis = buildInventoryReplacementAnalysis({
+    roomMiners: market.roomMiners,
+    rawInventoryMiners: inventoryReplacement.rawInventoryMiners,
+    currentSystemState: currentSystem,
   });
 
   function clearMarketRecommendations() {
@@ -784,6 +801,70 @@ export function useAppController() {
     }
   }
 
+  async function loadInventoryReplacementData() {
+    setInventoryReplacement((prev) => ({
+      ...prev,
+      loading: true,
+      status: "Checking RollerCoin session for inventory replacements...",
+    }));
+
+    try {
+      let authResult = await checkAuth(true, { cookieHeader: marketRef.current.cookieHeader });
+      if (!authResult?.authenticated) {
+        authResult = await loginToRollerCoin();
+      }
+      if (!authResult?.authenticated) {
+        throw new Error(authResult?.message || "RollerCoin session is not authorized.");
+      }
+
+      const activeCookieHeader =
+        typeof authResult.cookieHeader === "string" && authResult.cookieHeader.trim()
+          ? authResult.cookieHeader.trim()
+          : marketRef.current.cookieHeader;
+
+      let roomResult = { success: true, roomMiners: marketRef.current.roomMiners, reused: true };
+      if (!Array.isArray(marketRef.current.roomMiners) || marketRef.current.roomMiners.length === 0) {
+        setInventoryReplacement((prev) => ({
+          ...prev,
+          status: "Loading room miners before inventory replacement scan...",
+        }));
+        roomResult = await loadRoomMiners({ cookieHeader: activeCookieHeader });
+      }
+      if (!roomResult?.success) {
+        throw new Error(roomResult?.error || "Room miners are required before inventory replacement scan.");
+      }
+
+      setInventoryReplacement((prev) => ({
+        ...prev,
+        status: "Loading inventory miners...",
+      }));
+      const inventoryMinersResult = await invokeInventoryMiners(activeCookieHeader);
+      if (!inventoryMinersResult?.success || !Array.isArray(inventoryMinersResult.items)) {
+        throw new Error(inventoryMinersResult?.error || "Inventory miners load failed.");
+      }
+
+      setInventoryReplacement({
+        loading: false,
+        status: `Loaded ${inventoryMinersResult.items.length} inventory miner entries. Replacement suggestions updated.`,
+        rawInventoryMiners: inventoryMinersResult.items,
+        sourceInfo: {
+          endpoint: inventoryMinersResult.endpoint || "",
+          sourcePath: inventoryMinersResult.sourcePath || "",
+          loadedAt: Date.now(),
+        },
+        lastLoadedAt: Date.now(),
+      });
+      return { success: true, items: inventoryMinersResult.items };
+    } catch (error) {
+      setInventoryReplacement((prev) => ({
+        ...prev,
+        loading: false,
+        status: `Inventory replacement scan failed: ${error.message}`,
+      }));
+      return { success: false, error: error.message };
+    }
+  }
+
   async function refreshLeagueProfitabilityWithCookie(cookieHeader, options = {}) {
     const leagueId = String(options.leagueId || profitability.leagueId || "").trim();
     const loadingStatus = options.loadingStatus || "Loading league power and crypto prices...";
@@ -1221,6 +1302,8 @@ export function useAppController() {
     duplicateAnalysis,
     mergePlanner,
     mergeAnalysis,
+    inventoryReplacement,
+    inventoryReplacementAnalysis,
     profitability,
     profitabilityHistory,
     recommendations,
@@ -1245,6 +1328,7 @@ export function useAppController() {
       syncCurrentPower,
       loadRoomMiners,
       loadMergePlannerData,
+      loadInventoryReplacementData,
       loadLeagueProfitability,
       updateMergePlannerBudget,
       checkForUpdates,

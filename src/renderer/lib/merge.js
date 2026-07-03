@@ -709,6 +709,10 @@ function aggregateMiners(miners) {
   return [...byKey.values()];
 }
 
+export function normalizeInventoryMiners(miners) {
+  return aggregateMiners(miners);
+}
+
 function aggregateParts(parts) {
   const byKey = new Map();
   (Array.isArray(parts) ? parts : []).forEach((part) => {
