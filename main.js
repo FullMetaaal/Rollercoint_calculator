@@ -742,8 +742,8 @@ function setupAutoUpdater() {
   }
 
   autoUpdaterConfigured = true;
-  updater.autoDownload = true;
-  updater.autoInstallOnAppQuit = true;
+  updater.autoDownload = false;
+  updater.autoInstallOnAppQuit = false;
   updater.allowPrerelease = true;
 
   updater.on("checking-for-update", () => {
@@ -786,12 +786,12 @@ function setupAutoUpdater() {
     const { dialog } = require("electron");
     const dialogOptions = {
       type: "info",
-      buttons: ["Restart and Install", "Later"],
+      buttons: ["OK", "Later"],
       defaultId: 0,
       cancelId: 1,
       title: "Update Ready",
       message: `Version ${info?.version || "new"} has been downloaded.`,
-      detail: "Restart the app now to install the update.",
+      detail: "Close and restart the app when you are ready to install the update.",
     };
 
     try {
@@ -800,8 +800,8 @@ function setupAutoUpdater() {
         : await dialog.showMessageBox(dialogOptions);
 
       if (result.response === 0) {
-        setImmediate(() => {
-          updater.quitAndInstall(false, true);
+        logAutoUpdate("User acknowledged downloaded update.", {
+          version: info?.version || null,
         });
       }
     } catch (error) {
@@ -857,7 +857,7 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
         started: true,
         status: "update-available",
         version: info?.version || null,
-        message: `Update ${info?.version || "new"} found. Download started in the background.`,
+        message: `Update ${info?.version || "new"} found. Download is not started automatically.`,
       });
     };
 
