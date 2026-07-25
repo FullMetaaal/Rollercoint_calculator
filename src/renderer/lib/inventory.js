@@ -2,7 +2,7 @@ import { getExactMinerDuplicateKey } from "./duplicates";
 import { normalizeInventoryMiners } from "./merge";
 import { getCurrentSystemSnapshot, getCurrentTotal, POWER_MULTIPLIER, toThs } from "./power";
 
-const MIN_GAIN_PHS = 0.001;
+const MIN_GAIN_EHS = 0.000001;
 
 function getMinerBonusPercentValue(miner) {
   return Number.isFinite(Number(miner?.bonusPercent)) ? Number(miner.bonusPercent) : 0;
@@ -107,7 +107,7 @@ function buildReplacementSets(roomMiners) {
       key: `single:${String(miner?.id || index)}`,
       width: Math.floor(Number(miner.width)),
       miners: [miner],
-      removedPowerThs: toThs(miner.power, "Ph/s"),
+      removedPowerThs: toThs(miner.power, "Eh/s"),
       label: buildReplacementSetLabel([miner]),
     }));
 
@@ -120,7 +120,7 @@ function buildReplacementSets(roomMiners) {
         key: `pair:${String(miners[0]?.id || leftIndex)}:${String(miners[1]?.id || rightIndex)}`,
         width: 2,
         miners,
-        removedPowerThs: toThs(miners[0].power, "Ph/s") + toThs(miners[1].power, "Ph/s"),
+        removedPowerThs: toThs(miners[0].power, "Eh/s") + toThs(miners[1].power, "Eh/s"),
         label: buildReplacementSetLabel(miners),
       });
     }
@@ -177,7 +177,7 @@ export function buildInventoryReplacementAnalysis({
   const items = [];
   normalizedInventoryMiners.forEach((inventoryMiner) => {
     const width = Number.isFinite(Number(inventoryMiner.width)) ? Math.floor(Number(inventoryMiner.width)) : null;
-    const boughtPowerThs = toThs(inventoryMiner.power, "Ph/s");
+    const boughtPowerThs = toThs(inventoryMiner.power, "Eh/s");
     if (!width || !Number.isFinite(boughtPowerThs) || boughtPowerThs <= 0) return;
 
     const replacementPool = replacementSetsByWidth.get(width) || [];
@@ -187,8 +187,8 @@ export function buildInventoryReplacementAnalysis({
       const projectedBonusPercent = currentSystem.bonusPercent + bonusChange.bonusPercentDelta;
       const projectedTotalThs = getCurrentTotal(projectedBaseThs, projectedBonusPercent);
       const gainThs = projectedTotalThs - totalCurrentThs;
-      const gainPower = gainThs / POWER_MULTIPLIER["Ph/s"];
-      if (!Number.isFinite(gainPower) || gainPower <= MIN_GAIN_PHS) return;
+      const gainPower = gainThs / POWER_MULTIPLIER["Eh/s"];
+      if (!Number.isFinite(gainPower) || gainPower <= MIN_GAIN_EHS) return;
 
       items.push({
         key: `${inventoryMiner.id || inventoryMiner.name}:${replacementSet.key}`,
@@ -201,11 +201,11 @@ export function buildInventoryReplacementAnalysis({
         boughtBonusPercent: bonusChange.boughtBonusPercent,
         removedBonusPercent: bonusChange.removedBonusPercent,
         bonusPercentDelta: bonusChange.bonusPercentDelta,
-        basePowerDelta: (boughtPowerThs - replacementSet.removedPowerThs) / POWER_MULTIPLIER["Ph/s"],
+        basePowerDelta: (boughtPowerThs - replacementSet.removedPowerThs) / POWER_MULTIPLIER["Eh/s"],
         gainPower,
-        projectedBasePower: projectedBaseThs / POWER_MULTIPLIER["Ph/s"],
+        projectedBasePower: projectedBaseThs / POWER_MULTIPLIER["Eh/s"],
         projectedBonusPercent,
-        projectedTotalPower: projectedTotalThs / POWER_MULTIPLIER["Ph/s"],
+        projectedTotalPower: projectedTotalThs / POWER_MULTIPLIER["Eh/s"],
         duplicateAware: getExactMinerDuplicateKey(inventoryMiner) !== "" && bonusChange.boughtBonusPercent <= 0,
       });
     });

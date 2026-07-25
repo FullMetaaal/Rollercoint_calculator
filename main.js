@@ -10,6 +10,7 @@ let autoUpdater = null;
 let autoUpdaterConfigured = false;
 let autoUpdaterLoadFailed = false;
 let autoUpdateCheckInFlight = null;
+let autoUpdateInstallRequested = false;
 const DEV_PROFILE_SUFFIX = "v2";
 const ROLLERCOIN_PARTITION = "persist:rollercoin-auth";
 const ENABLE_INTERACTIVE_MARKET_SCANNER = true;
@@ -731,6 +732,37 @@ function getAutoUpdater() {
   }
 }
 
+function installDownloadedUpdate(updater, info, source = "auto") {
+  if (!updater) {
+    return;
+  }
+
+  if (autoUpdateInstallRequested) {
+    logAutoUpdate("Downloaded update install already requested.", {
+      version: info?.version || null,
+      source,
+    });
+    return;
+  }
+
+  autoUpdateInstallRequested = true;
+  logAutoUpdate("Installing downloaded update.", {
+    version: info?.version || null,
+    source,
+  });
+
+  setTimeout(() => {
+    try {
+      updater.quitAndInstall(false, true);
+    } catch (error) {
+      autoUpdateInstallRequested = false;
+      logAutoUpdate("Failed to start downloaded update install.", {
+        message: error?.message || String(error),
+      });
+    }
+  }, 750);
+}
+
 function setupAutoUpdater() {
   if (autoUpdaterConfigured || !app.isPackaged) {
     return;
@@ -743,7 +775,7 @@ function setupAutoUpdater() {
 
   autoUpdaterConfigured = true;
   updater.autoDownload = false;
-  updater.autoInstallOnAppQuit = false;
+  updater.autoInstallOnAppQuit = true;
   updater.allowPrerelease = true;
 
   updater.on("checking-for-update", () => {
@@ -777,38 +809,11 @@ function setupAutoUpdater() {
     });
   });
 
-  updater.on("update-downloaded", async (info) => {
+  updater.on("update-downloaded", (info) => {
     logAutoUpdate("Update downloaded.", {
       version: info?.version || null,
     });
-
-    const targetWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-    const { dialog } = require("electron");
-    const dialogOptions = {
-      type: "info",
-      buttons: ["OK", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-      title: "Update Ready",
-      message: `Version ${info?.version || "new"} has been downloaded.`,
-      detail: "Close and restart the app when you are ready to install the update.",
-    };
-
-    try {
-      const result = targetWindow
-        ? await dialog.showMessageBox(targetWindow, dialogOptions)
-        : await dialog.showMessageBox(dialogOptions);
-
-      if (result.response === 0) {
-        logAutoUpdate("User acknowledged downloaded update.", {
-          version: info?.version || null,
-        });
-      }
-    } catch (error) {
-      logAutoUpdate("Failed to show update dialog.", {
-        message: error?.message || String(error),
-      });
-    }
+    installDownloadedUpdate(updater, info, "update-downloaded");
   });
 }
 
@@ -854,30 +859,20 @@ function triggerAutoUpdateCheck({ manual = false } = {}) {
     };
 
     const onUpdateAvailable = (info) => {
-      if (manual) {
-        logAutoUpdate("Manual update download started.", {
-          version: info?.version || null,
-        });
-        Promise.resolve()
-          .then(() => updater.downloadUpdate())
-          .catch(onError);
-        return;
-      }
-
-      finish({
-        started: true,
-        status: "update-available",
+      logAutoUpdate(`${manual ? "Manual update" : "Update"} download started.`, {
         version: info?.version || null,
-        message: `Update ${info?.version || "new"} found. Download is not started automatically.`,
       });
+      Promise.resolve()
+        .then(() => updater.downloadUpdate())
+        .catch(onError);
     };
 
     const onUpdateDownloaded = (info) => {
       finish({
         started: true,
-        status: "update-downloaded",
+        status: "installing-update",
         version: info?.version || null,
-        message: `Update ${info?.version || "new"} downloaded. Close and restart the app when you are ready to install it.`,
+        message: `Update ${info?.version || "new"} downloaded. The app will restart now to install it.`,
       });
     };
 
@@ -1427,7 +1422,7 @@ function extractMarketplaceApiBonus(row) {
 
 function normalizeMarketplaceApiPower(value) {
   if (!Number.isFinite(value) || value < 0) return NaN;
-  return value / 1000000;
+  return value / 1000000000;
 }
 
 function extractMarketplaceMinerWidth(row) {
@@ -3952,7 +3947,7 @@ async function fetchMarketMinersViaBrowserSession(preferredCookieHeader = "", pr
               getByPath(row, "item_info.power"),
               getByPath(row, "product.power"),
             ]);
-            const power = Number.isFinite(rawPower) ? rawPower / 1000000 : NaN;
+            const power = Number.isFinite(rawPower) ? rawPower / 1000000000 : NaN;
 
             const directBonusPercent = firstFiniteNumber([
               row.miner_bonus,

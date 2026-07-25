@@ -1,4 +1,4 @@
-import { formatMarketValue, formatPowerFromPhs } from "../lib/power";
+import { formatMarketValue, formatPowerFromEhs } from "../lib/power";
 import { MinerVisual } from "./MinerVisual";
 
 function buildMinerIdList(miners) {
@@ -106,7 +106,7 @@ export function DuplicateMinersSection({ duplicateAnalysis, market, displayUnit,
                   <td><DuplicateGroupMinerCell group={group} /></td>
                   <td>{group.count}</td>
                   <td>L{group.level}</td>
-                  <td>{formatPowerFromPhs(group.representative?.power, displayUnit)}</td>
+                  <td>{formatPowerFromEhs(group.representative?.power, displayUnit)}</td>
                   <td>{formatMarketValue(group.representative?.bonusPercent, 2)}%</td>
                   <td>{group.width}</td>
                 </tr>

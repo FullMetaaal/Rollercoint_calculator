@@ -6,6 +6,7 @@ export const POWER_MULTIPLIER = {
   "Zh/s": 1000 ** 3,
 };
 
+export const INTERNAL_POWER_UNIT = "Eh/s";
 export const UNIT_ORDER = ["Gh/s", "Th/s", "Ph/s", "Eh/s", "Zh/s"];
 
 export const CURRENT_SYSTEM_STORAGE_KEY = "rollercoin.currentSystem.v1";
@@ -78,19 +79,23 @@ export function formatMarketValue(value, fractionDigits = 2) {
   return Number(value).toLocaleString("en-US", { maximumFractionDigits: fractionDigits });
 }
 
-export function formatPowerFromThs(valueThs, displayUnit = "Ph/s", fractionDigits = 6) {
+export function formatPowerFromThs(valueThs, displayUnit = "Eh/s", fractionDigits = 6) {
   if (!Number.isFinite(valueThs)) return "-";
-  const unit = normalizePowerUnit(displayUnit) || "Ph/s";
+  const unit = normalizePowerUnit(displayUnit) || DEFAULT_CURRENT_SYSTEM.displayUnit;
   const value = convertThsToUnit(valueThs, unit);
   if (!Number.isFinite(value)) return "-";
   return `${formatMarketValue(value, fractionDigits)} ${unit}`;
 }
 
-export function formatPowerFromPhs(valuePhs, displayUnit = "Ph/s", fractionDigits = 6) {
+export function formatPowerFromPhs(valuePhs, displayUnit = "Eh/s", fractionDigits = 6) {
   return formatPowerFromThs(toThs(valuePhs, "Ph/s"), displayUnit, fractionDigits);
 }
 
-export function formatSignedPower(valueThs, displayUnit = "Ph/s", fractionDigits = 6) {
+export function formatPowerFromEhs(valueEhs, displayUnit = "Eh/s", fractionDigits = 6) {
+  return formatPowerFromThs(toThs(valueEhs, "Eh/s"), displayUnit, fractionDigits);
+}
+
+export function formatSignedPower(valueThs, displayUnit = "Eh/s", fractionDigits = 6) {
   if (!Number.isFinite(valueThs)) return "-";
   const sign = valueThs > 0 ? "+" : "";
   return `${sign}${formatPowerFromThs(valueThs, displayUnit, fractionDigits)}`;
@@ -108,10 +113,11 @@ export function getCurrentTotal(baseThs, bonusPercent) {
 
 export function getCurrentSystemSnapshot(currentSystem) {
   const baseValue = parseNumber(currentSystem.baseValue);
-  const baseUnit = normalizePowerUnit(currentSystem.baseUnit) || "Ph/s";
+  const baseUnit = normalizePowerUnit(currentSystem.baseUnit) || DEFAULT_CURRENT_SYSTEM.baseUnit;
   const bonusPercent = parseNumber(currentSystem.bonusPercent);
-  const displayUnit = normalizePowerUnit(currentSystem.displayUnit) || "Ph/s";
+  const displayUnit = normalizePowerUnit(currentSystem.displayUnit) || DEFAULT_CURRENT_SYSTEM.displayUnit;
   const baseThs = toThs(baseValue, baseUnit);
+  const totalThs = getCurrentTotal(baseThs, bonusPercent);
 
   if (!Number.isFinite(baseValue) || baseValue < 0) return null;
   if (!Number.isFinite(baseThs) || baseThs < 0) return null;
@@ -123,14 +129,19 @@ export function getCurrentSystemSnapshot(currentSystem) {
     bonusPercent,
     displayUnit,
     baseThs,
+    baseEhs: baseThs / POWER_MULTIPLIER["Eh/s"],
     basePhs: baseThs / POWER_MULTIPLIER["Ph/s"],
-    totalThs: getCurrentTotal(baseThs, bonusPercent),
+    totalThs,
+    totalEhs: totalThs / POWER_MULTIPLIER["Eh/s"],
   };
 }
 
 export function getCurrentSystemHistorySignature(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return "";
-  return `${roundForStorage(snapshot.basePhs, 6)}|${roundForStorage(snapshot.bonusPercent, 4)}`;
+  const baseEhs = Number.isFinite(Number(snapshot.baseEhs))
+    ? Number(snapshot.baseEhs)
+    : Number(snapshot.basePhs) / 1000;
+  return `${roundForStorage(baseEhs, 9)}|${roundForStorage(snapshot.bonusPercent, 4)}`;
 }
 
 export function getCurrentSystemHistorySourceLabel(source, locale = "en") {
@@ -145,10 +156,14 @@ export function getCurrentSystemHistorySourceLabel(source, locale = "en") {
 }
 
 export function createCurrentSystemHistoryEntry(snapshot, source = "manual") {
+  const baseEhs = snapshot.baseThs / POWER_MULTIPLIER["Eh/s"];
+  const totalEhs = snapshot.totalThs / POWER_MULTIPLIER["Eh/s"];
   return {
     recordedAt: Date.now(),
+    baseEhs: roundForStorage(baseEhs, 9),
     basePhs: roundForStorage(snapshot.basePhs, 6),
     bonusPercent: roundForStorage(snapshot.bonusPercent, 4),
+    totalEhs: roundForStorage(totalEhs, 9),
     totalPhs: roundForStorage(snapshot.totalThs / POWER_MULTIPLIER["Ph/s"], 6),
     source,
     signature: getCurrentSystemHistorySignature(snapshot),
@@ -183,11 +198,21 @@ export function restoreCurrentSystemState() {
     return { ...DEFAULT_CURRENT_SYSTEM };
   }
 
+  const savedBaseValue = saved.baseValue === undefined ? DEFAULT_CURRENT_SYSTEM.baseValue : String(saved.baseValue);
+  const parsedSavedBaseValue = parseNumber(savedBaseValue);
+  const rawSavedBaseUnit = normalizePowerUnit(saved.baseUnit);
+  const savedBaseUnit = rawSavedBaseUnit ||
+    (Number.isFinite(parsedSavedBaseValue) && parsedSavedBaseValue > 10 ? "Ph/s" : DEFAULT_CURRENT_SYSTEM.baseUnit);
+  const savedBaseThs = toThs(parsedSavedBaseValue, savedBaseUnit);
+  const restoredBaseEhs = Number.isFinite(savedBaseThs)
+    ? roundForStorage(savedBaseThs / POWER_MULTIPLIER["Eh/s"], 9)
+    : DEFAULT_CURRENT_SYSTEM.baseValue;
+
   return {
-    baseValue: saved.baseValue === undefined ? DEFAULT_CURRENT_SYSTEM.baseValue : String(saved.baseValue),
-    baseUnit: normalizePowerUnit(saved.baseUnit) || DEFAULT_CURRENT_SYSTEM.baseUnit,
+    baseValue: String(restoredBaseEhs),
+    baseUnit: "Eh/s",
     bonusPercent: saved.bonusPercent === undefined ? DEFAULT_CURRENT_SYSTEM.bonusPercent : String(saved.bonusPercent),
-    displayUnit: normalizePowerUnit(saved.displayUnit) || DEFAULT_CURRENT_SYSTEM.displayUnit,
+    displayUnit: "Eh/s",
   };
 }
 
@@ -225,8 +250,12 @@ export function formatHistoryDateTime(timestamp, locale = "en") {
 }
 
 export function formatHistoryGrowthPercent(currentEntry, previousEntry) {
-  const currentTotal = Number(currentEntry?.totalPhs);
-  const previousTotal = Number(previousEntry?.totalPhs);
+  const currentTotal = Number.isFinite(Number(currentEntry?.totalEhs))
+    ? Number(currentEntry.totalEhs)
+    : Number(currentEntry?.totalPhs) / 1000;
+  const previousTotal = Number.isFinite(Number(previousEntry?.totalEhs))
+    ? Number(previousEntry.totalEhs)
+    : Number(previousEntry?.totalPhs) / 1000;
   if (!Number.isFinite(currentTotal) || !Number.isFinite(previousTotal) || previousTotal <= 0) {
     return "-";
   }

@@ -1,9 +1,18 @@
 import {
   CURRENT_SYSTEM_HISTORY_VISIBLE_COUNT,
+  formatPowerFromEhs,
   formatHistoryDateTime,
   formatHistoryGrowthPercent,
   getCurrentSystemHistorySourceLabel,
 } from "../lib/power";
+
+function getHistoryPowerEhs(entry, field) {
+  const ehsField = field === "total" ? "totalEhs" : "baseEhs";
+  const phsField = field === "total" ? "totalPhs" : "basePhs";
+  if (Number.isFinite(Number(entry?.[ehsField]))) return Number(entry[ehsField]);
+  if (Number.isFinite(Number(entry?.[phsField]))) return Number(entry[phsField]) / 1000;
+  return NaN;
+}
 
 export function CurrentSystemSection({
   currentSystem,
@@ -162,9 +171,9 @@ export function CurrentSystemSection({
                     visibleHistory.map((entry, index) => (
                       <tr key={`${entry.recordedAt}-${index}`}>
                         <td>{formatHistoryDateTime(entry.recordedAt, locale)}</td>
-                        <td>{entry.basePhs}</td>
+                        <td>{formatPowerFromEhs(getHistoryPowerEhs(entry, "base"), currentSystem.displayUnit)}</td>
                         <td>{entry.bonusPercent}%</td>
-                        <td>{entry.totalPhs}</td>
+                        <td>{formatPowerFromEhs(getHistoryPowerEhs(entry, "total"), currentSystem.displayUnit)}</td>
                         <td className="history-growth-column">{formatHistoryGrowthPercent(entry, visibleHistory[index + 1] || null)}</td>
                         <td>{getCurrentSystemHistorySourceLabel(entry.source, locale)}</td>
                       </tr>

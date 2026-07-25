@@ -56,7 +56,7 @@ import { writeRendererLog } from "../lib/runtime";
 
 const DEFAULT_COMPARISON = {
   oldMinerPowerValue: "",
-  oldMinerPowerUnit: "Ph/s",
+  oldMinerPowerUnit: "Eh/s",
   oldMinerBonusPercent: "",
   candidates: [createEmptyCandidateRow()],
 };
@@ -511,13 +511,14 @@ export function useAppController() {
         baseValue: String(syncedBasePowerEhs),
         baseUnit: "Eh/s",
         bonusPercent: String(powerResult.bonusPercent),
+        displayUnit: "Eh/s",
       }));
 
       const snapshot = {
         baseValue: String(syncedBasePowerEhs),
         baseUnit: "Eh/s",
         bonusPercent: String(powerResult.bonusPercent),
-        displayUnit: currentSystem.displayUnit,
+        displayUnit: "Eh/s",
       };
       const parsedSnapshot = getCurrentSystemSnapshot(snapshot);
       if (parsedSnapshot) {

@@ -1,4 +1,4 @@
-import { formatMarketValue, formatPowerFromPhs } from "../lib/power";
+import { formatMarketValue, formatPowerFromEhs } from "../lib/power";
 import { MinerVisual } from "./MinerVisual";
 
 function formatLoadedAt(timestamp, locale, t) {
@@ -20,13 +20,13 @@ function formatProjectedGain(value, displayUnit, t) {
   if (!Number.isFinite(Number(value))) {
     return t("unknown");
   }
-  return `+${formatPowerFromPhs(Number(value), displayUnit)}`;
+  return `+${formatPowerFromEhs(Number(value), displayUnit)}`;
 }
 
 function buildResultMeta(miner, displayUnit, t) {
   const parts = [];
   if (Number.isFinite(Number(miner?.power)) && Number(miner.power) > 0) {
-    parts.push(formatPowerFromPhs(miner.power, displayUnit));
+    parts.push(formatPowerFromEhs(miner.power, displayUnit));
   }
   if (Number.isFinite(Number(miner?.bonusPercent)) && Number(miner.bonusPercent) > 0) {
     parts.push(`${formatMarketValue(miner.bonusPercent, 2)}% ${t("history_bonus").toLowerCase()}`);
@@ -128,10 +128,10 @@ function BudgetOpportunityCard({ item, displayUnit, i18n }) {
       </div>
       <div className="merge-budget-metrics">
         <span>{t("spend", { value: formatSpend(item.spend, t) })}</span>
-        <span>{t("projected_gain", { value: formatProjectedGain(item.gainPhs, displayUnit, t) })}</span>
+        <span>{t("projected_gain", { value: formatProjectedGain(item.gainEhs, displayUnit, t) })}</span>
         <span>
           {t("gain_per_rlt_value", { value: Number.isFinite(Number(item.gainPerRlt)) && item.gainPerRlt !== Number.POSITIVE_INFINITY
-            ? formatPowerFromPhs(item.gainPerRlt, displayUnit)
+            ? formatPowerFromEhs(item.gainPerRlt, displayUnit)
             : item.spend <= 0
               ? t("free_label")
               : t("unknown") })}
@@ -270,12 +270,12 @@ export function MergePlannerSection({ mergePlanner, mergeAnalysis, displayUnit, 
                           {buildResultMeta(item.resultMiner, displayUnit, t) || t("result_stats_unavailable")}
                         </div>
                         <div className="market-price-subcopy">
-                          {t("projected_gain", { value: formatProjectedGain(item.projectedGainPhs, displayUnit, t) })}
+                          {t("projected_gain", { value: formatProjectedGain(item.projectedGainEhs, displayUnit, t) })}
                         </div>
                         <div className="market-price-subcopy">
                           {t("gain_per_rlt_value", { value: Number.isFinite(Number(item.projectedGainPerRlt)) && item.projectedGainPerRlt !== Number.POSITIVE_INFINITY
-                            ? formatPowerFromPhs(item.projectedGainPerRlt, displayUnit)
-                            : Number(item.craftSpendEstimate) <= 0 && Number.isFinite(Number(item.projectedGainPhs))
+                            ? formatPowerFromEhs(item.projectedGainPerRlt, displayUnit)
+                            : Number(item.craftSpendEstimate) <= 0 && Number.isFinite(Number(item.projectedGainEhs))
                               ? t("free_label")
                               : t("unknown") })}
                         </div>

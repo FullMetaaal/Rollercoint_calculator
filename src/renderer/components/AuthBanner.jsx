@@ -11,6 +11,7 @@ export function AuthBanner({ market, onAuthAction, onCheckUpdates, i18n }) {
       ? "error"
       : market.appUpdateStatus === "update-available" ||
         market.appUpdateStatus === "update-downloaded" ||
+        market.appUpdateStatus === "installing-update" ||
         market.appUpdateStatus === "up-to-date"
         ? "success"
         : "neutral";

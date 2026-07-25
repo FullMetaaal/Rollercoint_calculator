@@ -56,7 +56,7 @@ export function createEmptyCandidateRow() {
   return {
     id: `candidate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     powerValue: "",
-    unit: "Ph/s",
+    unit: "Eh/s",
     bonusPercent: "",
     price: "",
   };

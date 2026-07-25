@@ -1,4 +1,4 @@
-import { formatMarketValue, formatPowerFromPhs } from "../lib/power";
+import { formatMarketValue, formatPowerFromEhs } from "../lib/power";
 import { MinerVisual } from "./MinerVisual";
 
 function MinerCell({ miner, subtitle }) {
@@ -36,7 +36,7 @@ function ReplacementList({ miners, displayUnit, i18n }) {
         <MinerCell
           key={`${miner.id || miner.name}-${index}`}
           miner={miner}
-          subtitle={`${formatPowerFromPhs(miner.power, displayUnit)} | ${buildMinerMeta(miner, t)}`}
+          subtitle={`${formatPowerFromEhs(miner.power, displayUnit)} | ${buildMinerMeta(miner, t)}`}
         />
       ))}
     </div>
@@ -117,17 +117,17 @@ export function InventoryReplacementSection({ inventory, inventoryAnalysis, disp
                   <td>
                     <MinerCell
                       miner={item.inventoryMiner}
-                      subtitle={`${formatPowerFromPhs(item.inventoryMiner.power, displayUnit)} | ${buildMinerMeta(item.inventoryMiner, t)} | ${t("inventory_replacement_count", { count: item.inventoryCount })}`}
+                      subtitle={`${formatPowerFromEhs(item.inventoryMiner.power, displayUnit)} | ${buildMinerMeta(item.inventoryMiner, t)} | ${t("inventory_replacement_count", { count: item.inventoryCount })}`}
                     />
                   </td>
                   <td>
                     <ReplacementList miners={item.replacementMiners} displayUnit={displayUnit} i18n={i18n} />
                   </td>
-                  <td className="positive">{formatPowerFromPhs(item.gainPower, displayUnit)}</td>
-                  <td>{formatPowerFromPhs(item.basePowerDelta, displayUnit)}</td>
+                  <td className="positive">{formatPowerFromEhs(item.gainPower, displayUnit)}</td>
+                  <td>{formatPowerFromEhs(item.basePowerDelta, displayUnit)}</td>
                   <td>{formatMarketValue(item.bonusPercentDelta, 2)}%</td>
                   <td>
-                    <div>{formatPowerFromPhs(item.projectedTotalPower, displayUnit)}</div>
+                    <div>{formatPowerFromEhs(item.projectedTotalPower, displayUnit)}</div>
                     <div className="market-miner-subcopy">{formatMarketValue(item.projectedBonusPercent, 2)}%</div>
                   </td>
                 </tr>

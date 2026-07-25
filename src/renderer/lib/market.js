@@ -1,7 +1,7 @@
 import {
   POWER_MULTIPLIER,
   formatMarketValue,
-  formatPowerFromPhs,
+  formatPowerFromEhs,
   getCurrentSystemSnapshot,
   getCurrentTotal,
   parseNumber,
@@ -26,8 +26,8 @@ const BUDGET_COMBINATION_UNLIMITED_MAX_DEPTH = 5;
 const PRICE_HISTORY_MAX_POINTS = 60;
 const PRICE_HISTORY_REPEAT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CACHE_FILENAME = "market-miners-cache.json";
-const MARKET_MINERS_CACHE_VERSION = 5;
-const MIN_GAIN_PHS = 0.001;
+const MARKET_MINERS_CACHE_VERSION = 6;
+const MIN_GAIN_EHS = 0.000001;
 
 export const DEFAULT_MARKET_SETTINGS = {
   roomWidthMode: "any",
@@ -330,7 +330,7 @@ function getMinerWidthIdentityValue(miner) {
 function getMinerPowerIdentityValue(miner) {
   const power = firstFinite([miner?.power]);
   if (!Number.isFinite(power) || power <= 0) return null;
-  return Math.round(power * 1_000_000);
+  return Math.round(power * 1_000_000_000);
 }
 
 function getMinerBonusIdentityValue(miner) {
@@ -722,7 +722,7 @@ function extractRoomPower(item) {
     item?.hash_rate,
   ]);
   if (!Number.isFinite(rawPower) || rawPower <= 0) return NaN;
-  return rawPower / 1000000;
+  return rawPower / 1000000000;
 }
 
 function extractMarketPower(item) {
@@ -733,7 +733,10 @@ function extractMarketPower(item) {
     getByPath(item, "item_info.power"),
     getByPath(item, "product.power"),
   ]);
-  return Number.isFinite(power) && power > 0 ? power : NaN;
+  if (!Number.isFinite(power) || power <= 0) return NaN;
+  if (power < 1) return power;
+  if (power >= 100000) return power / 1000000000;
+  return power / 1000;
 }
 
 function extractMarketPrice(item) {
@@ -1534,13 +1537,13 @@ function buildRecommendationEntry({
 
   const safeBoughtPowerThs = Number.isFinite(Number(boughtPowerThs))
     ? Number(boughtPowerThs)
-    : normalizedPurchaseMiners.reduce((sum, miner) => sum + toThs(miner.power, "Ph/s"), 0);
+    : normalizedPurchaseMiners.reduce((sum, miner) => sum + toThs(miner.power, "Eh/s"), 0);
   const nominalBoughtBonusPercent = Number.isFinite(Number(boughtBonusPercent))
     ? Number(boughtBonusPercent)
     : normalizedPurchaseMiners.reduce((sum, miner) => sum + (Number(miner.bonusPercent) || 0), 0);
   const safeRemovedPowerThs = Number.isFinite(Number(removedPowerThs))
     ? Number(removedPowerThs)
-    : normalizedReplacementMiners.reduce((sum, miner) => sum + toThs(miner.power, "Ph/s"), 0);
+    : normalizedReplacementMiners.reduce((sum, miner) => sum + toThs(miner.power, "Eh/s"), 0);
   const nominalRemovedBonusPercent = Number.isFinite(Number(removedBonusPercent))
     ? Number(removedBonusPercent)
     : normalizedReplacementMiners.reduce((sum, miner) => sum + (Number(miner.bonusPercent) || 0), 0);
@@ -1582,15 +1585,15 @@ function buildRecommendationEntry({
         ? String(leadMiner.name || "Marketplace miner")
         : buildReplacementSetLabel(normalizedPurchaseMiners),
     price: numericPrice,
-    power: safeBoughtPowerThs / POWER_MULTIPLIER["Ph/s"],
+    power: safeBoughtPowerThs / POWER_MULTIPLIER["Eh/s"],
     bonusPercent: safeBoughtBonusPercent,
     width: purchaseCount === 1 ? (leadMiner.width ?? null) : widthDisplay,
     widthDisplay,
-    gainPower: gainThs / POWER_MULTIPLIER["Ph/s"],
-    gainPerPrice: Number.isFinite(gainPerPrice) ? gainPerPrice / POWER_MULTIPLIER["Ph/s"] : NaN,
-    projectedBasePower: projectedBaseThs / POWER_MULTIPLIER["Ph/s"],
+    gainPower: gainThs / POWER_MULTIPLIER["Eh/s"],
+    gainPerPrice: Number.isFinite(gainPerPrice) ? gainPerPrice / POWER_MULTIPLIER["Eh/s"] : NaN,
+    projectedBasePower: projectedBaseThs / POWER_MULTIPLIER["Eh/s"],
     projectedBonusPercent,
-    projectedTotalPower: projectedTotalThs / POWER_MULTIPLIER["Ph/s"],
+    projectedTotalPower: projectedTotalThs / POWER_MULTIPLIER["Eh/s"],
     replacedMinerName: normalizedReplacementMiners[0]?.name || "",
     replacedMinerLevel: normalizedReplacementMiners[0]?.level ?? null,
     replacedMinerWidth: normalizedReplacementMiners[0]?.width ?? null,
@@ -1617,11 +1620,11 @@ function buildRecommendationEntry({
     boughtBonusPercent: safeBoughtBonusPercent,
     removedPowerThs: safeRemovedPowerThs,
     removedBonusPercent: safeRemovedBonusPercent,
-    basePowerDelta: basePowerDeltaThs / POWER_MULTIPLIER["Ph/s"],
+    basePowerDelta: basePowerDeltaThs / POWER_MULTIPLIER["Eh/s"],
     bonusPercentDelta,
-    basePowerGain: gainBreakdown.basePowerGainThs / POWER_MULTIPLIER["Ph/s"],
-    bonusPowerGain: gainBreakdown.bonusPowerGainThs / POWER_MULTIPLIER["Ph/s"],
-    finalTotalPowerGain: gainThs / POWER_MULTIPLIER["Ph/s"],
+    basePowerGain: gainBreakdown.basePowerGainThs / POWER_MULTIPLIER["Eh/s"],
+    bonusPowerGain: gainBreakdown.bonusPowerGainThs / POWER_MULTIPLIER["Eh/s"],
+    finalTotalPowerGain: gainThs / POWER_MULTIPLIER["Eh/s"],
     removedMask,
     buyMask,
     marketMinerIds: normalizedPurchaseMiners.map((miner) => String(miner?.id || "")),
@@ -1666,7 +1669,7 @@ function buildRoomReplacementSets(roomMiners, strategy = "strict", roomBonusStat
     .map((miner) => ({
       width: Math.floor(Number(miner.width)),
       miners: [miner],
-      removedPowerThs: toThs(miner.power, "Ph/s"),
+      removedPowerThs: toThs(miner.power, "Eh/s"),
       removedBonusPercent: calculateEffectiveRemovedBonusPercent(roomBonusState, [miner]),
       removedMask: buildRemovedMask([miner]),
       label: buildReplacementSetLabel([miner]),
@@ -1684,7 +1687,7 @@ function buildRoomReplacementSets(roomMiners, strategy = "strict", roomBonusStat
       flexibleSets.push({
         width: 2,
         miners,
-        removedPowerThs: toThs(miners[0].power, "Ph/s") + toThs(miners[1].power, "Ph/s"),
+        removedPowerThs: toThs(miners[0].power, "Eh/s") + toThs(miners[1].power, "Eh/s"),
         removedBonusPercent: calculateEffectiveRemovedBonusPercent(roomBonusState, miners),
         removedMask: buildRemovedMask(miners),
         label: buildReplacementSetLabel(miners),
@@ -1723,7 +1726,7 @@ function buildSingleRecommendationItems({
         purchaseMiners: [purchaseMiner],
         price: miner.price,
         currency: miner.currency || "RLT",
-        boughtPowerThs: toThs(miner.power, "Ph/s"),
+        boughtPowerThs: toThs(miner.power, "Eh/s"),
         boughtBonusPercent: miner.bonusPercent,
         roomBonusState,
         sourceMinerId: miner.id,
@@ -1769,9 +1772,9 @@ function buildSingleRecommendationItems({
   return sortRecommendationItems(singleItems, sortMode);
 }
 
-function hasMeaningfulPositiveGain(gainPowerPhs) {
-  if (!Number.isFinite(gainPowerPhs)) return false;
-  return gainPowerPhs > MIN_GAIN_PHS;
+function hasMeaningfulPositiveGain(gainPowerEhs) {
+  if (!Number.isFinite(gainPowerEhs)) return false;
+  return gainPowerEhs > MIN_GAIN_EHS;
 }
 
 function selectBudgetCombinationBuyPool(singleItems, budget = null) {
@@ -1863,7 +1866,7 @@ function buildBudgetReplacementSetMap(roomMiners, currentSystem, maxWidth, roomB
       return {
         width,
         miner,
-        removedPowerThs: toThs(miner.power, "Ph/s"),
+        removedPowerThs: toThs(miner.power, "Eh/s"),
         removedBonusPercent: calculateEffectiveRemovedBonusPercent(roomBonusState, [miner]),
         removedMask: roomMinerMaskById.get(String(miner?.id || `room-miner-${index + 1}`)) || 0n,
       };
@@ -1945,7 +1948,7 @@ function buildBudgetModeSingleItems({
           replacementMiners: replacementSet.miners,
           price: purchaseMiner.price,
           currency: purchaseMiner.currency || "RLT",
-          boughtPowerThs: toThs(purchaseMiner.power, "Ph/s"),
+          boughtPowerThs: toThs(purchaseMiner.power, "Eh/s"),
           boughtBonusPercent: purchaseMiner.bonusPercent,
           removedPowerThs: replacementSet.removedPowerThs,
           removedBonusPercent: replacementSet.removedBonusPercent,
@@ -1962,7 +1965,7 @@ function buildBudgetModeSingleItems({
         purchaseMiners: [purchaseMiner],
         price: purchaseMiner.price,
         currency: purchaseMiner.currency || "RLT",
-        boughtPowerThs: toThs(purchaseMiner.power, "Ph/s"),
+        boughtPowerThs: toThs(purchaseMiner.power, "Eh/s"),
         boughtBonusPercent: purchaseMiner.bonusPercent,
         roomBonusState,
         sourceMinerId: purchaseMiner.id,
@@ -1989,7 +1992,7 @@ function buildBudgetCombinationOptions({ budget, buyPool }) {
       purchaseMiners: [purchaseMiner],
       price,
       currency: purchaseMiner.currency || "RLT",
-      boughtPowerThs: toThs(purchaseMiner.power, "Ph/s"),
+      boughtPowerThs: toThs(purchaseMiner.power, "Eh/s"),
       boughtBonusPercent: purchaseMiner.bonusPercent,
       totalWidth: Number.isFinite(Number(purchaseMiner.width)) ? Math.floor(Number(purchaseMiner.width)) : 0,
       offerKey: getMarketMinerOfferKey(purchaseMiner),
@@ -2376,7 +2379,7 @@ export function buildMarketRecommendations({
       : "not set"
     : formatMarketValue(budget, 2);
   const maxPriceText = maxMinerPrice === null ? "not set" : formatMarketValue(maxMinerPrice, 2);
-  const currentBaseText = formatPowerFromPhs(currentSystem.basePhs, currentSystem.displayUnit);
+  const currentBaseText = formatPowerFromEhs(currentSystem.baseEhs, currentSystem.displayUnit);
   const currentBonusText = `${formatMarketValue(currentSystem.bonusPercent, 2)}%`;
   const sortModeText =
     marketSettings.sortMode === "gainPower"
@@ -2424,9 +2427,9 @@ export function buildMarketRecommendations({
     bundleCount: bundleItems.length,
     recommendedCount: upgradeItems.length,
     totalMatched: allItems.length,
-    currentBasePower: currentSystem.basePhs,
+    currentBasePower: currentSystem.baseEhs,
     currentBonusPercent: currentSystem.bonusPercent,
-    currentTotalPower: totalCurrentThs / POWER_MULTIPLIER["Ph/s"],
+    currentTotalPower: totalCurrentThs / POWER_MULTIPLIER["Eh/s"],
     roomMinersCount: roomMiners.length,
     filteredMarketMinersCount: filteredMarketMiners.length,
     overlappingOwnedCount,

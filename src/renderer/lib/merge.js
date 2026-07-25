@@ -133,18 +133,20 @@ function firstFinite(values) {
   return NaN;
 }
 
-function normalizePowerPhs(value) {
+function normalizePowerEhs(value) {
   const parsed = firstFinite([value]);
   if (!Number.isFinite(parsed) || parsed <= 0) return NaN;
-  if (parsed >= 100000) return parsed / 1000000;
-  return parsed;
+  if (parsed < 1) return parsed;
+  if (parsed >= 100000) return parsed / 1000000000;
+  return parsed / 1000;
 }
 
-function normalizeInventoryPowerPhs(value) {
+function normalizeInventoryPowerEhs(value) {
   const parsed = firstFinite([value]);
   if (!Number.isFinite(parsed) || parsed <= 0) return NaN;
   if (!Number.isInteger(parsed) && parsed < 1) return parsed;
-  return parsed / 1000000;
+  if (!Number.isInteger(parsed)) return parsed / 1000;
+  return parsed / 1000000000;
 }
 
 function normalizeBonusPercent(value) {
@@ -557,8 +559,8 @@ function normalizeMinerEntity(entity, fallbackName = "Miner", options = {}) {
     getByPath(subject, "market_hashrate"),
   ]);
   const power = options.inventoryScale === true
-    ? normalizeInventoryPowerPhs(rawPower)
-    : normalizePowerPhs(rawPower);
+    ? normalizeInventoryPowerEhs(rawPower)
+    : normalizePowerEhs(rawPower);
 
   const rawBonusPercent = firstFinite([
     subject?.bonusPercent,
@@ -655,7 +657,7 @@ function buildMinerKey(entity) {
   const width = Number(entity?.width);
   const level = Number(entity?.level);
   if (Number.isFinite(power) && power > 0) {
-    const roundedPower = Math.round(power * 1000000);
+    const roundedPower = Math.round(power * 1000000000);
     const roundedBonus = Number.isFinite(bonusPercent) ? Math.round(bonusPercent * 100) : 0;
     const roundedWidth = Number.isFinite(width) ? Math.floor(width) : 0;
     const roundedLevel = Number.isFinite(level) ? Math.floor(level) : 0;
@@ -771,7 +773,7 @@ function classifyRequirement(entity) {
   if (signatures.includes("miner")) return "miner";
   if (entity?.part || entity?.resource || entity?.part_id || entity?.resource_id) return "part";
   if (entity?.miner || entity?.miner_id || entity?.power || entity?.hashrate || entity?.hash_rate) return "miner";
-  return Number.isFinite(normalizePowerPhs(entity?.power || entity?.hashrate || entity?.hash_rate)) ? "miner" : "part";
+  return Number.isFinite(normalizePowerEhs(entity?.power || entity?.hashrate || entity?.hash_rate)) ? "miner" : "part";
 }
 
 function extractRequirementArrays(recipe) {
@@ -872,19 +874,19 @@ function parseBudget(value) {
   return parsed;
 }
 
-function calculateProjectedGainPhs(currentSystemSnapshot, miner) {
+function calculateProjectedGainEhs(currentSystemSnapshot, miner) {
   if (!currentSystemSnapshot || !miner) return NaN;
-  const minerPowerPhs = Number(miner.power);
+  const minerPowerEhs = Number(miner.power);
   const minerBonusPercent = Number(miner.bonusPercent) || 0;
-  if (!Number.isFinite(minerPowerPhs) || minerPowerPhs <= 0) return NaN;
+  if (!Number.isFinite(minerPowerEhs) || minerPowerEhs <= 0) return NaN;
 
-  const boughtPowerThs = minerPowerPhs * POWER_MULTIPLIER["Ph/s"];
+  const boughtPowerThs = minerPowerEhs * POWER_MULTIPLIER["Eh/s"];
   const currentTotalThs = getCurrentTotal(currentSystemSnapshot.baseThs, currentSystemSnapshot.bonusPercent);
   const nextTotalThs = getCurrentTotal(
     currentSystemSnapshot.baseThs + boughtPowerThs,
     currentSystemSnapshot.bonusPercent + minerBonusPercent,
   );
-  return (nextTotalThs - currentTotalThs) / POWER_MULTIPLIER["Ph/s"];
+  return (nextTotalThs - currentTotalThs) / POWER_MULTIPLIER["Eh/s"];
 }
 
 function buildBudgetOpportunities({ budget, currentSystemSnapshot, marketMiners, craftItems }) {
@@ -898,7 +900,7 @@ function buildBudgetOpportunities({ budget, currentSystemSnapshot, marketMiners,
   const directMarketItems = (Array.isArray(marketMiners) ? marketMiners : [])
     .filter((miner) => Number.isFinite(Number(miner?.price)) && Number(miner.price) <= budget)
     .map((miner) => {
-      const gainPhs = calculateProjectedGainPhs(currentSystemSnapshot, miner);
+      const gainEhs = calculateProjectedGainEhs(currentSystemSnapshot, miner);
       const price = Number(miner.price);
       return {
         id: `market-${miner.id || miner.name}`,
@@ -907,8 +909,8 @@ function buildBudgetOpportunities({ budget, currentSystemSnapshot, marketMiners,
         name: miner.name,
         miner,
         spend: price,
-        gainPhs,
-        gainPerRlt: price > 0 && Number.isFinite(gainPhs) ? gainPhs / price : NaN,
+        gainEhs,
+        gainPerRlt: price > 0 && Number.isFinite(gainEhs) ? gainEhs / price : NaN,
         summary: `Buy ready for ${price.toFixed(2)} RLT.`,
         extra: Number.isFinite(Number(miner.bonusPercent)) && Number(miner.bonusPercent) > 0
           ? `${Number(miner.bonusPercent).toFixed(2)}% bonus included.`
@@ -924,7 +926,7 @@ function buildBudgetOpportunities({ budget, currentSystemSnapshot, marketMiners,
     )
     .map((item) => {
       const spend = Number(item.craftSpendEstimate) || 0;
-      const gainPhs = calculateProjectedGainPhs(currentSystemSnapshot, item.resultMiner);
+      const gainEhs = calculateProjectedGainEhs(currentSystemSnapshot, item.resultMiner);
       return {
         id: `craft-${item.id}`,
         type: "craft",
@@ -932,8 +934,8 @@ function buildBudgetOpportunities({ budget, currentSystemSnapshot, marketMiners,
         name: item.resultMiner?.name || item.name,
         miner: item.resultMiner,
         spend,
-        gainPhs,
-        gainPerRlt: spend > 0 && Number.isFinite(gainPhs) ? gainPhs / spend : Number.POSITIVE_INFINITY,
+        gainEhs,
+        gainPerRlt: spend > 0 && Number.isFinite(gainEhs) ? gainEhs / spend : Number.POSITIVE_INFINITY,
         summary: spend <= 0
           ? "You already own all required ingredients."
           : `Finish craft for about ${spend.toFixed(2)} RLT in missing miners.`,
@@ -948,8 +950,8 @@ function buildBudgetOpportunities({ budget, currentSystemSnapshot, marketMiners,
 
   const budgetOpportunities = [...craftCandidates, ...directMarketItems]
     .sort((left, right) => {
-      const leftGain = Number.isFinite(left.gainPhs) ? left.gainPhs : -Infinity;
-      const rightGain = Number.isFinite(right.gainPhs) ? right.gainPhs : -Infinity;
+      const leftGain = Number.isFinite(left.gainEhs) ? left.gainEhs : -Infinity;
+      const rightGain = Number.isFinite(right.gainEhs) ? right.gainEhs : -Infinity;
       if (rightGain !== leftGain) return rightGain - leftGain;
       const leftTypeRank = left.type === "craft" ? 0 : 1;
       const rightTypeRank = right.type === "craft" ? 0 : 1;
@@ -1221,11 +1223,11 @@ export function buildMergePlannerAnalysis({
       knownMissingMinerCost,
       readyBuyPrice,
     });
-    const projectedGainPhs = calculateProjectedGainPhs(currentSystemSnapshot, resultMiner);
+    const projectedGainEhs = calculateProjectedGainEhs(currentSystemSnapshot, resultMiner);
     const projectedGainPerRlt =
-      Number.isFinite(Number(decision.craftSpendEstimate)) && Number(decision.craftSpendEstimate) > 0 && Number.isFinite(projectedGainPhs)
-        ? projectedGainPhs / Number(decision.craftSpendEstimate)
-        : Number(decision.craftSpendEstimate) <= 0 && Number.isFinite(projectedGainPhs)
+      Number.isFinite(Number(decision.craftSpendEstimate)) && Number(decision.craftSpendEstimate) > 0 && Number.isFinite(projectedGainEhs)
+        ? projectedGainEhs / Number(decision.craftSpendEstimate)
+        : Number(decision.craftSpendEstimate) <= 0 && Number.isFinite(projectedGainEhs)
           ? Number.POSITIVE_INFINITY
           : NaN;
 
@@ -1255,7 +1257,7 @@ export function buildMergePlannerAnalysis({
       craftSpendEstimate: decision.craftSpendEstimate,
       marketSpendEstimate: decision.marketSpendEstimate,
       savingsVsMarket: decision.savingsVsMarket,
-      projectedGainPhs,
+      projectedGainEhs,
       projectedGainPerRlt,
       sortRank: decision.sortRank,
       readyBuyPrice,

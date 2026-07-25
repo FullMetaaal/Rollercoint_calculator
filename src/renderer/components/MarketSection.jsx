@@ -1,4 +1,4 @@
-import { POWER_MULTIPLIER, formatMarketValue, formatPowerFromPhs } from "../lib/power";
+import { POWER_MULTIPLIER, formatMarketValue, formatPowerFromEhs } from "../lib/power";
 import { MinerVisual } from "./MinerVisual";
 
 function buildMinerMeta(miner, t) {
@@ -56,7 +56,7 @@ function formatSignedPower(value, displayUnit) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return "-";
   const sign = numericValue > 0 ? "+" : "";
-  return `${sign}${formatPowerFromPhs(numericValue, displayUnit)}`;
+  return `${sign}${formatPowerFromEhs(numericValue, displayUnit)}`;
 }
 
 function buildFairPriceDetailText(item, t) {
@@ -95,7 +95,7 @@ function sumMinerWidths(miners) {
 function buildRankingReasonText(item, reasonMode, displayUnit, t) {
   const totalGainText = formatSignedPower(item?.finalTotalPowerGain ?? item?.gainPower, displayUnit);
   const efficiencyText = Number.isFinite(Number(item?.gainPerPrice))
-    ? formatPowerFromPhs(item.gainPerPrice, displayUnit)
+    ? formatPowerFromEhs(item.gainPerPrice, displayUnit)
     : "-";
   const priceText = `${formatMarketValue(item?.price, 2)} ${item?.currency || "RLT"}`;
   const fairPriceText = buildFairPriceReasonText(item, t);
@@ -127,17 +127,17 @@ function buildReplacementReasonText(item, displayUnit, t, rt) {
   }
 
   const freedWidth = sumMinerWidths(replacementMiners);
-  const removedBasePower = Number(item?.removedPowerThs) / POWER_MULTIPLIER["Ph/s"];
+  const removedBasePower = Number(item?.removedPowerThs) / POWER_MULTIPLIER["Eh/s"];
   const removedBonusPercent = Number(item?.removedBonusPercent) || 0;
   const slotText = freedWidth > 0 ? t("slot_text_width", { width: freedWidth }) : t("slot_text_generic");
   return t("replace_reason_with_loss", {
     slotText,
-    removedPower: formatPowerFromPhs(removedBasePower, displayUnit),
+    removedPower: formatPowerFromEhs(removedBasePower, displayUnit),
     removedBonus: `${formatMarketValue(removedBonusPercent, 2)}%`,
   });
 }
 
-function MinerCard({ miner, tone = "buy", displayUnit = "Ph/s", showPrice = false, i18n }) {
+function MinerCard({ miner, tone = "buy", displayUnit = "Eh/s", showPrice = false, i18n }) {
   const { t } = i18n;
   const hasPrice = showPrice && Number.isFinite(Number(miner?.price)) && Number(miner.price) > 0;
   const currency = typeof miner?.currency === "string" && miner.currency ? miner.currency : "RLT";
@@ -153,7 +153,7 @@ function MinerCard({ miner, tone = "buy", displayUnit = "Ph/s", showPrice = fals
               {formatMarketValue(miner.price, 2)} {currency}
             </span>
           ) : null}
-          <span className="positive">{formatPowerFromPhs(miner.power, displayUnit)}</span>
+          <span className="positive">{formatPowerFromEhs(miner.power, displayUnit)}</span>
           <span className={Number(miner.bonusPercent) > 0 ? "positive" : "muted"}>
             {formatMarketValue(miner.bonusPercent, 2)}% {t("history_bonus").toLowerCase()}
           </span>
@@ -182,12 +182,12 @@ function SuggestionItem({ item, index, displayUnit, reasonMode, currentTotalPowe
   const replacementMiners = Array.isArray(item.replacementMiners) ? item.replacementMiners : [];
   const showBundleMinerPrices = purchaseMiners.length > 1;
   const currentTotalText = Number.isFinite(Number(currentTotalPower))
-    ? formatPowerFromPhs(currentTotalPower, displayUnit)
+    ? formatPowerFromEhs(currentTotalPower, displayUnit)
     : "-";
-  const projectedTotalText = formatPowerFromPhs(item.projectedTotalPower, displayUnit);
-  const projectedBaseText = formatPowerFromPhs(item.projectedBasePower, displayUnit);
+  const projectedTotalText = formatPowerFromEhs(item.projectedTotalPower, displayUnit);
+  const projectedBaseText = formatPowerFromEhs(item.projectedBasePower, displayUnit);
   const efficiencyText = Number.isFinite(Number(item.gainPerPrice))
-    ? formatPowerFromPhs(item.gainPerPrice, displayUnit)
+    ? formatPowerFromEhs(item.gainPerPrice, displayUnit)
     : "-";
   const fairPriceText = item?.fairPriceLabel
     ? `${item.fairPriceLabel}${Number.isFinite(Number(item?.fairPriceDeltaPercent)) ? ` (${formatSignedPercent(item.fairPriceDeltaPercent, 1)})` : ""}`
@@ -330,7 +330,7 @@ function UpgradeSuggestions({ recommendations, displayUnit, i18n }) {
     <div id="roomReplacementSuggestions" className="room-replacement-suggestions">
       <div className="suggestion-summary-bar">
         <span>{budgetLabel}</span>
-        <span>{t("dashboard_stat_current_total")}: {formatPowerFromPhs(recommendations.currentTotalPower, displayUnit)}</span>
+        <span>{t("dashboard_stat_current_total")}: {formatPowerFromEhs(recommendations.currentTotalPower, displayUnit)}</span>
         <span>{t("profitable_options_count", { count: recommendations.recommendedCount })}</span>
       </div>
       <SuggestionGroup
@@ -426,7 +426,7 @@ function RoomMinersTable({ market, recommendations, displayUnit, onShowMore, i18
                   <td>
                     <MinerCell miner={miner} subtitle={buildMinerMeta(miner, t)} />
                   </td>
-                  <td>{formatPowerFromPhs(miner.power, displayUnit)}</td>
+                  <td>{formatPowerFromEhs(miner.power, displayUnit)}</td>
                   <td>{formatMarketValue(miner.bonusPercent, 2)}%</td>
                   <td>{miner.width || "-"}</td>
                 </tr>
@@ -513,11 +513,11 @@ function MarketResultsTable({ market, recommendations, displayUnit, onShowMore, 
                       <div>{formatMarketValue(miner.price, 2)}</div>
                       <div className="market-price-subcopy">{buildFairPriceDetailText(miner, t)}</div>
                     </td>
-                    <td>{formatPowerFromPhs(miner.power, displayUnit)}</td>
+                    <td>{formatPowerFromEhs(miner.power, displayUnit)}</td>
                     <td>{formatMarketValue(miner.bonusPercent, 2)}%</td>
                     <td>{miner.widthDisplay || miner.width || "-"}</td>
-                    <td>{formatPowerFromPhs(miner.gainPower, displayUnit)}</td>
-                    <td>{Number.isFinite(miner.gainPerPrice) ? formatPowerFromPhs(miner.gainPerPrice, displayUnit) : "-"}</td>
+                    <td>{formatPowerFromEhs(miner.gainPower, displayUnit)}</td>
+                    <td>{Number.isFinite(miner.gainPerPrice) ? formatPowerFromEhs(miner.gainPerPrice, displayUnit) : "-"}</td>
                     <td>
                       <div className={`market-fair-price-badge market-fair-price-${miner.fairPriceCategory || "no-history"}`}>
                         {rt(miner.fairPriceLabel || "New")}
