@@ -871,7 +871,7 @@ export function translateRuntimeText(text, locale = "en") {
     [/^Login failed: (.+)$/, "Ошибка входа: $1"],
     [/^Login error: (.+)$/, "Ошибка входа: $1"],
     [/^Current power sync failed: (.+)$/, "Ошибка синхронизации текущей мощности: $1"],
-    [/^Synced from RollerCoin: (.+) Ph\/s base, (.+)% bonus\.$/, "Синхронизировано из RollerCoin: база $1 Ph/s, бонус $2%."],
+    [/^Synced from RollerCoin: (.+) (Ph\/s|Eh\/s) base, (.+)% bonus\.$/, "Синхронизировано из RollerCoin: база $1 $2, бонус $3%."],
     [/^Profitability loaded\. Best daily estimate: (.+) at \$(.+)\.$/, "Доходность загружена. Лучший расчет на день: $1 на $$$2."],
     [/^Profitability loaded\. No priced rewards were calculated\.$/, "Доходность загружена, но награды с ценой не рассчитаны."],
     [/^Profitability loaded\. User power was not detected in the league response\.$/, "Доходность загружена, но RollerCoin не вернул user_power для этой лиги."],

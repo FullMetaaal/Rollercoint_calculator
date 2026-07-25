@@ -1,7 +1,7 @@
 import { formatMarketValue } from "./power";
 import { getIpcRenderer } from "./runtime";
 
-export const DEFAULT_LEAGUE_ID = "68af01ce48490927df92d67f";
+export const DEFAULT_LEAGUE_ID = "68af01ce48490927df92d67e";
 export const BLOCKS_PER_HOUR = 6;
 export const BLOCKS_PER_DAY = 24 * BLOCKS_PER_HOUR;
 export const BLOCKS_PER_MONTH = 30 * BLOCKS_PER_DAY;

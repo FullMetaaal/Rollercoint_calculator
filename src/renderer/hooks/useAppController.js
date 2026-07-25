@@ -504,16 +504,18 @@ export function useAppController() {
         throw new Error(powerResult?.error || powerResult?.message || "Failed to load current RollerCoin power.");
       }
 
+      const syncedBasePowerEhs = Number((Number(powerResult.basePowerPhs) / 1000).toFixed(6));
+
       setCurrentSystem((prev) => ({
         ...prev,
-        baseValue: String(powerResult.basePowerPhs),
-        baseUnit: "Ph/s",
+        baseValue: String(syncedBasePowerEhs),
+        baseUnit: "Eh/s",
         bonusPercent: String(powerResult.bonusPercent),
       }));
 
       const snapshot = {
-        baseValue: String(powerResult.basePowerPhs),
-        baseUnit: "Ph/s",
+        baseValue: String(syncedBasePowerEhs),
+        baseUnit: "Eh/s",
         bonusPercent: String(powerResult.bonusPercent),
         displayUnit: currentSystem.displayUnit,
       };
@@ -525,7 +527,7 @@ export function useAppController() {
       setMarket((prev) => ({
         ...prev,
         currentPowerSyncInFlight: false,
-        currentPowerSyncStatus: `Synced from RollerCoin: ${powerResult.basePowerPhs} Ph/s base, ${powerResult.bonusPercent}% bonus.`,
+        currentPowerSyncStatus: `Synced from RollerCoin: ${syncedBasePowerEhs} Eh/s base, ${powerResult.bonusPercent}% bonus.`,
         marketStatus: prev.marketMiners.length > 0 ? "Current system synced. Click Find best options to refresh recommendations." : prev.marketStatus,
         marketSummary: "",
       }));

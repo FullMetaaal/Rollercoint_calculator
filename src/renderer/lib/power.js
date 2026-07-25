@@ -14,10 +14,10 @@ export const CURRENT_SYSTEM_HISTORY_LIMIT = 180;
 export const CURRENT_SYSTEM_HISTORY_VISIBLE_COUNT = 5;
 
 export const DEFAULT_CURRENT_SYSTEM = {
-  baseValue: "183.673",
-  baseUnit: "Ph/s",
+  baseValue: "0.183673",
+  baseUnit: "Eh/s",
   bonusPercent: "330.49",
-  displayUnit: "Ph/s",
+  displayUnit: "Eh/s",
 };
 
 function readStoredJson(storageKey) {

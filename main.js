@@ -2893,23 +2893,6 @@ function buildRollercoinInventoryEndpoint(kind = "miners", skip = 0, limit = 24)
   const safeKind = kind === "parts" ? "parts" : "miners";
   const safeSkip = Math.max(0, Math.floor(Number(skip) || 0));
   const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 24)));
-  if (safeKind === "miners") {
-    const params = new URLSearchParams();
-    params.set("itemType", "miner");
-    params.set("search", "");
-    params.set("sort", "updated");
-    params.set("skip", String(safeSkip));
-    params.set("limit", String(safeLimit));
-    params.set("sort_direction", "-1");
-    params.set("filter[0][name]", "power");
-    params.set("filter[0][min]", "0");
-    params.set("filter[0][max]", "20480000");
-    params.set("filter[1][name]", "bonus_percent");
-    params.set("filter[1][min]", "0");
-    params.set("filter[1][max]", "100");
-    params.set("type", "miner");
-    return `https://rollercoin.com/api/game/inventory?${params.toString()}`;
-  }
   return `https://rollercoin.com/api/storage/inventory/${safeKind}?sort=date&sort_direction=-1&skip=${safeSkip}&limit=${safeLimit}`;
 }
 
